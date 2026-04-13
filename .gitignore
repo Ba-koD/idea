@@ -6,4 +6,5 @@ crash.log
 infra/terraform/terraform.tfvars
 infra/ansible/generated/
 *.retry
-
+.env
+node_modules/

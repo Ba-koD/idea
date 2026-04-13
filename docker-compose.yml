@@ -1,0 +1,51 @@
+services:
+  frontend:
+    build:
+      context: ./frontend
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      APP_DISPLAY_NAME: ${APP_DISPLAY_NAME:-idea Service Demo}
+      PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:8080/api}
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+
+  backend:
+    build:
+      context: ./backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: 8080
+      APP_ENV: ${APP_ENV:-local}
+      DATABASE_HOST: ${DATABASE_HOST:-db}
+      DATABASE_PORT: ${DATABASE_PORT:-5432}
+      DATABASE_NAME: ${DATABASE_NAME:-idea}
+      DATABASE_USER: ${DATABASE_USER:-idea}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-idea-local-password}
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/healthz >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-idea}
+      POSTGRES_USER: ${POSTGRES_USER:-idea}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-idea-local-password}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - idea-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -h 127.0.0.1 -p 5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  idea-postgres-data:

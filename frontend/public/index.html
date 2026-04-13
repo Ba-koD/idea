@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>idea Service Demo</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="card">
+        <p class="eyebrow">idea platform sample</p>
+        <h1>Frontend receives time from the backend.</h1>
+        <p class="lede">
+          This page calls the backend using runtime configuration and shows both
+          application time and database time.
+        </p>
+        <dl class="grid">
+          <div>
+            <dt>Display Name</dt>
+            <dd id="display-name">-</dd>
+          </div>
+          <div>
+            <dt>Environment</dt>
+            <dd id="environment">-</dd>
+          </div>
+          <div>
+            <dt>API Base URL</dt>
+            <dd id="api-base-url">-</dd>
+          </div>
+          <div>
+            <dt>Backend host</dt>
+            <dd id="hostname">-</dd>
+          </div>
+          <div>
+            <dt>App time</dt>
+            <dd id="app-time">-</dd>
+          </div>
+          <div>
+            <dt>Database time</dt>
+            <dd id="db-time">-</dd>
+          </div>
+          <div>
+            <dt>Database</dt>
+            <dd id="db-name">-</dd>
+          </div>
+          <div>
+            <dt>Status</dt>
+            <dd id="status">loading</dd>
+          </div>
+        </dl>
+        <button id="refresh" type="button">Refresh now</button>
+      </section>
+    </main>
+
+    <script src="/config.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>
