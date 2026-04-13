@@ -1,0 +1,28 @@
+- name: Ensure Homebrew is installed on macOS target
+  ansible.builtin.command:
+    argv:
+      - /opt/homebrew/bin/brew
+      - --version
+  changed_when: false
+  environment:
+    PATH: "{{ platform_cli_path }}"
+
+- name: Ensure required Homebrew formulae are installed
+  ansible.builtin.shell: |
+    export PATH="{{ platform_cli_path }}"
+    brew list --formula {{ item }} >/dev/null 2>&1 || brew install {{ item }}
+  args:
+    executable: /bin/bash
+  loop: "{{ platform_homebrew_formulae }}"
+  changed_when: false
+  environment:
+    PATH: "{{ platform_cli_path }}"
+
+- name: Validate Docker daemon on macOS
+  ansible.builtin.command:
+    argv:
+      - docker
+      - info
+  changed_when: false
+  environment:
+    PATH: "{{ platform_cli_path }}"

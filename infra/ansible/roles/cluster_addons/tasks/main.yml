@@ -1,0 +1,197 @@
+- name: Ensure argocd namespace exists
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.shell: |
+    kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+  args:
+    executable: /bin/bash
+  changed_when: false
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+- name: Install Argo CD
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - apply
+      - -n
+      - argocd
+      - -f
+      - "https://raw.githubusercontent.com/argoproj/argo-cd/{{ argocd_version }}/manifests/install.yaml"
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+- name: Wait for Argo CD server deployment
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - rollout
+      - status
+      - deployment/argocd-server
+      - -n
+      - argocd
+      - --timeout=300s
+  changed_when: false
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+- name: Add Helm repositories required for add-ons
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - helm
+      - repo
+      - add
+      - "{{ item.name }}"
+      - "{{ item.url }}"
+      - --force-update
+  loop:
+    - { name: "prometheus-community", url: "https://prometheus-community.github.io/helm-charts" }
+    - { name: "hashicorp", url: "https://helm.releases.hashicorp.com" }
+  changed_when: false
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+- name: Update Helm repositories
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - helm
+      - repo
+      - update
+  changed_when: false
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+- name: Render monitoring values
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/templates/kube-prometheus-stack-values.yaml.j2"
+    dest: /tmp/kube-prometheus-stack-values.yaml
+    mode: "0644"
+  when: enable_monitoring
+
+- name: Install kube-prometheus-stack
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - helm
+      - upgrade
+      - --install
+      - "{{ kube_prometheus_release_name }}"
+      - prometheus-community/kube-prometheus-stack
+      - --namespace
+      - "{{ monitoring_namespace }}"
+      - --create-namespace
+      - --version
+      - "{{ kube_prometheus_chart_version }}"
+      - --values
+      - /tmp/kube-prometheus-stack-values.yaml
+      - --wait
+      - --timeout
+      - 10m
+  when: enable_monitoring
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+- name: Ensure data namespace exists
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.shell: |
+    kubectl create namespace {{ data_namespace }} --dry-run=client -o yaml | kubectl apply -f -
+  args:
+    executable: /bin/bash
+  changed_when: false
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+- name: Uninstall legacy PostgreSQL Helm release if present
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - helm
+      - uninstall
+      - "{{ postgresql_release_name }}"
+      - --namespace
+      - "{{ data_namespace }}"
+      - --wait
+      - --ignore-not-found
+  changed_when: false
+  failed_when: false
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+- name: Render PostgreSQL manifest
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/templates/postgresql.yaml.j2"
+    dest: /tmp/idea-postgresql.yaml
+    mode: "0644"
+
+- name: Install internal PostgreSQL
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - apply
+      - -f
+      - /tmp/idea-postgresql.yaml
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+- name: Wait for PostgreSQL deployment rollout
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - rollout
+      - status
+      - deployment/{{ postgresql_release_name }}
+      - -n
+      - "{{ data_namespace }}"
+      - --timeout=300s
+  changed_when: false
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+- name: Render Vault values
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/templates/vault-values.yaml.j2"
+    dest: /tmp/idea-vault-values.yaml
+    mode: "0644"
+  when: enable_vault
+
+- name: Install Vault dev mode
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - helm
+      - upgrade
+      - --install
+      - "{{ vault_release_name }}"
+      - hashicorp/vault
+      - --namespace
+      - "{{ vault_namespace }}"
+      - --create-namespace
+      - --version
+      - "{{ vault_chart_version }}"
+      - --values
+      - /tmp/idea-vault-values.yaml
+      - --wait
+      - --timeout
+      - 10m
+  when: enable_vault
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"

@@ -1,0 +1,381 @@
+- name: Ensure edge namespace exists
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.shell: |
+    kubectl create namespace {{ edge_namespace }} --dry-run=client -o yaml | kubectl apply -f -
+  args:
+    executable: /bin/bash
+  changed_when: false
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+- name: Derive Cloudflare routing values
+  ansible.builtin.set_fact:
+    cloudflare_idea_hostname: "{{ cloudflare_public_subdomain }}.{{ idea_base_domain }}"
+    cloudflare_tunnel_service_url: "http://{{ platform_caddy_name }}.{{ edge_namespace }}.svc.cluster.local:80"
+    cloudflare_admin_allowed_ips_normalized: "{{ cloudflare_admin_allowed_ips | default([]) | map('trim') | reject('equalto', '') | list }}"
+
+- name: Render platform Caddy manifest
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/templates/platform-caddy.yaml.j2"
+    dest: /tmp/platform-caddy.yaml
+    mode: "0644"
+
+- name: Apply platform Caddy manifest
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - apply
+      - -f
+      - /tmp/platform-caddy.yaml
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+- name: Wait for platform Caddy rollout
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - rollout
+      - status
+      - "deployment/{{ platform_caddy_name }}"
+      - -n
+      - "{{ edge_namespace }}"
+      - --timeout=300s
+  changed_when: false
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+- name: Assert Cloudflare reconciliation configuration
+  ansible.builtin.assert:
+    that:
+      - enable_cloudflared
+      - cloudflare_api_token | length > 0
+      - cloudflare_account_id | length > 0
+      - cloudflare_zone_id | length > 0
+      - cloudflare_admin_allowed_ips_normalized | length > 0
+    fail_msg: "Cloudflare reconciliation requires enable_cloudflared=true plus cloudflare_api_token, cloudflare_account_id, cloudflare_zone_id, and at least one cloudflare_admin_allowed_ips entry."
+  when: enable_cloudflare_reconciliation
+  delegate_to: localhost
+  run_once: true
+
+- name: List existing Cloudflare tunnels
+  ansible.builtin.uri:
+    url: "{{ cloudflare_api_base_url }}/accounts/{{ cloudflare_account_id }}/cfd_tunnel"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ cloudflare_api_token }}"
+      Content-Type: application/json
+    return_content: true
+    status_code: 200
+  register: cloudflare_tunnels_response
+  when: enable_cloudflare_reconciliation
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+
+- name: Select Cloudflare tunnel by name
+  ansible.builtin.set_fact:
+    cloudflare_existing_tunnel: "{{ (cloudflare_tunnels_response.json.result | selectattr('name', 'equalto', cloudflare_tunnel_name) | list | first) | default({}) }}"
+  when: enable_cloudflare_reconciliation
+  no_log: true
+
+- name: Create Cloudflare tunnel
+  ansible.builtin.uri:
+    url: "{{ cloudflare_api_base_url }}/accounts/{{ cloudflare_account_id }}/cfd_tunnel"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ cloudflare_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      name: "{{ cloudflare_tunnel_name }}"
+      config_src: cloudflare
+    return_content: true
+    status_code: 200
+  register: cloudflare_tunnel_create_response
+  when:
+    - enable_cloudflare_reconciliation
+    - cloudflare_existing_tunnel | length == 0
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+
+- name: Resolve Cloudflare tunnel id
+  ansible.builtin.set_fact:
+    cloudflare_tunnel_id: "{{ cloudflare_existing_tunnel.id if (cloudflare_existing_tunnel | length > 0) else cloudflare_tunnel_create_response.json.result.id }}"
+  when: enable_cloudflare_reconciliation
+  no_log: true
+
+- name: Fetch existing Cloudflare tunnel token
+  ansible.builtin.uri:
+    url: "{{ cloudflare_api_base_url }}/accounts/{{ cloudflare_account_id }}/cfd_tunnel/{{ cloudflare_tunnel_id }}/token"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ cloudflare_api_token }}"
+      Content-Type: application/json
+    return_content: true
+    status_code: 200
+  register: cloudflare_tunnel_token_response
+  when:
+    - enable_cloudflare_reconciliation
+    - cloudflare_existing_tunnel | length > 0
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+
+- name: Store Cloudflare runtime tunnel token
+  ansible.builtin.set_fact:
+    cloudflared_runtime_token: "{{ cloudflare_tunnel_token_response.json.result if (cloudflare_existing_tunnel | length > 0) else cloudflare_tunnel_create_response.json.result.token }}"
+  when: enable_cloudflare_reconciliation
+  no_log: true
+
+- name: Configure Cloudflare tunnel ingress
+  ansible.builtin.uri:
+    url: "{{ cloudflare_api_base_url }}/accounts/{{ cloudflare_account_id }}/cfd_tunnel/{{ cloudflare_tunnel_id }}/configurations"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ cloudflare_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      config:
+        ingress:
+          - hostname: "{{ cloudflare_idea_hostname }}"
+            service: "{{ cloudflare_tunnel_service_url }}"
+            originRequest: {}
+          - service: http_status:404
+    return_content: true
+    status_code: 200
+  when: enable_cloudflare_reconciliation
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+
+- name: Look up Cloudflare DNS record for public idea hostname
+  ansible.builtin.uri:
+    url: "{{ cloudflare_api_base_url }}/zones/{{ cloudflare_zone_id }}/dns_records?type=CNAME&name={{ cloudflare_idea_hostname | urlencode }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ cloudflare_api_token }}"
+      Content-Type: application/json
+    return_content: true
+    status_code: 200
+  register: cloudflare_dns_lookup_response
+  when: enable_cloudflare_reconciliation
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+
+- name: Select Cloudflare DNS record by hostname
+  ansible.builtin.set_fact:
+    cloudflare_existing_dns_record: "{{ (cloudflare_dns_lookup_response.json.result | first) | default({}) }}"
+    cloudflare_tunnel_dns_target: "{{ cloudflare_tunnel_id }}.cfargotunnel.com"
+  when: enable_cloudflare_reconciliation
+  no_log: true
+
+- name: Create Cloudflare DNS record for public idea hostname
+  ansible.builtin.uri:
+    url: "{{ cloudflare_api_base_url }}/zones/{{ cloudflare_zone_id }}/dns_records"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ cloudflare_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      type: CNAME
+      proxied: true
+      name: "{{ cloudflare_idea_hostname }}"
+      content: "{{ cloudflare_tunnel_dns_target }}"
+    return_content: true
+    status_code: 200
+  when:
+    - enable_cloudflare_reconciliation
+    - cloudflare_existing_dns_record | length == 0
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+
+- name: Update Cloudflare DNS record for public idea hostname
+  ansible.builtin.uri:
+    url: "{{ cloudflare_api_base_url }}/zones/{{ cloudflare_zone_id }}/dns_records/{{ cloudflare_existing_dns_record.id }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ cloudflare_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      type: CNAME
+      proxied: true
+      name: "{{ cloudflare_idea_hostname }}"
+      content: "{{ cloudflare_tunnel_dns_target }}"
+    return_content: true
+    status_code: 200
+  when:
+    - enable_cloudflare_reconciliation
+    - cloudflare_existing_dns_record | length > 0
+    - cloudflare_existing_dns_record.content != cloudflare_tunnel_dns_target or not (cloudflare_existing_dns_record.proxied | default(false))
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+
+- name: Build Cloudflare WAF allowlist expression
+  ansible.builtin.set_fact:
+    cloudflare_admin_allowlist_expression: "http.host eq \"{{ cloudflare_idea_hostname }}\" and not ip.src in { {{ cloudflare_admin_allowed_ips_normalized | join(' ') }} }"
+  when: enable_cloudflare_reconciliation
+
+- name: Get Cloudflare zone WAF entry point ruleset
+  ansible.builtin.uri:
+    url: "{{ cloudflare_api_base_url }}/zones/{{ cloudflare_zone_id }}/rulesets/phases/http_request_firewall_custom/entrypoint"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ cloudflare_api_token }}"
+      Content-Type: application/json
+    return_content: true
+    status_code:
+      - 200
+      - 404
+  register: cloudflare_waf_entrypoint_response
+  when: enable_cloudflare_reconciliation
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+
+- name: Create Cloudflare WAF entry point ruleset with admin IP block rule
+  ansible.builtin.uri:
+    url: "{{ cloudflare_api_base_url }}/zones/{{ cloudflare_zone_id }}/rulesets"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ cloudflare_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      name: Zone-level phase entry point
+      description: Managed by idea platform for admin IP restriction
+      kind: zone
+      phase: http_request_firewall_custom
+      rules:
+        - ref: "{{ cloudflare_waf_rule_ref }}"
+          description: "{{ cloudflare_waf_rule_description }}"
+          expression: "{{ cloudflare_admin_allowlist_expression }}"
+          action: block
+          enabled: true
+    return_content: true
+    status_code: 200
+  when:
+    - enable_cloudflare_reconciliation
+    - cloudflare_waf_entrypoint_response.status == 404
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+
+- name: Select existing Cloudflare WAF rule
+  ansible.builtin.set_fact:
+    cloudflare_waf_ruleset_id: "{{ cloudflare_waf_entrypoint_response.json.result.id }}"
+    cloudflare_existing_waf_rule: "{{ (cloudflare_waf_entrypoint_response.json.result.rules | default([]) | selectattr('ref', 'equalto', cloudflare_waf_rule_ref) | list | first) | default({}) }}"
+  when:
+    - enable_cloudflare_reconciliation
+    - cloudflare_waf_entrypoint_response.status == 200
+  no_log: true
+
+- name: Create Cloudflare WAF admin IP block rule
+  ansible.builtin.uri:
+    url: "{{ cloudflare_api_base_url }}/zones/{{ cloudflare_zone_id }}/rulesets/{{ cloudflare_waf_ruleset_id }}/rules"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ cloudflare_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      ref: "{{ cloudflare_waf_rule_ref }}"
+      description: "{{ cloudflare_waf_rule_description }}"
+      expression: "{{ cloudflare_admin_allowlist_expression }}"
+      action: block
+      enabled: true
+    return_content: true
+    status_code: 200
+  when:
+    - enable_cloudflare_reconciliation
+    - cloudflare_waf_entrypoint_response.status == 200
+    - cloudflare_existing_waf_rule | length == 0
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+
+- name: Update Cloudflare WAF admin IP block rule
+  ansible.builtin.uri:
+    url: "{{ cloudflare_api_base_url }}/zones/{{ cloudflare_zone_id }}/rulesets/{{ cloudflare_waf_ruleset_id }}/rules/{{ cloudflare_existing_waf_rule.id }}"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ cloudflare_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      ref: "{{ cloudflare_waf_rule_ref }}"
+      description: "{{ cloudflare_waf_rule_description }}"
+      expression: "{{ cloudflare_admin_allowlist_expression }}"
+      action: block
+      enabled: true
+    return_content: true
+    status_code: 200
+  when:
+    - enable_cloudflare_reconciliation
+    - cloudflare_waf_entrypoint_response.status == 200
+    - cloudflare_existing_waf_rule | length > 0
+    - cloudflare_existing_waf_rule.expression != cloudflare_admin_allowlist_expression or cloudflare_existing_waf_rule.action != 'block' or not (cloudflare_existing_waf_rule.enabled | default(true))
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+
+- name: Resolve effective cloudflared tunnel token
+  ansible.builtin.set_fact:
+    cloudflared_effective_token: "{{ cloudflared_runtime_token | default(cloudflared_tunnel_token, true) }}"
+  no_log: true
+
+- name: Render cloudflared manifest
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/templates/cloudflared.yaml.j2"
+    dest: /tmp/cloudflared.yaml
+    mode: "0644"
+  when:
+    - enable_cloudflared
+    - cloudflared_effective_token | length > 0
+
+- name: Apply cloudflared manifest
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - apply
+      - -f
+      - /tmp/cloudflared.yaml
+  when:
+    - enable_cloudflared
+    - cloudflared_effective_token | length > 0
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+- name: Wait for cloudflared rollout
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - rollout
+      - status
+      - deployment/cloudflared
+      - -n
+      - "{{ edge_namespace }}"
+      - --timeout=300s
+  when:
+    - enable_cloudflared
+    - cloudflared_effective_token | length > 0
+  changed_when: false
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"

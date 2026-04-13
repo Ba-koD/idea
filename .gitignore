@@ -1,0 +1,9 @@
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+infra/terraform/terraform.tfvars
+infra/ansible/generated/
+*.retry
+

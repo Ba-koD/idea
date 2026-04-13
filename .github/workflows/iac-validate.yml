@@ -1,0 +1,49 @@
+name: Validate IaC
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - "infra/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/**"
+      - "infra/**"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      ANSIBLE_CONFIG: ${{ github.workspace }}/infra/ansible/ansible.cfg
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Ansible
+        run: pip install ansible-core
+
+      - name: Terraform fmt
+        run: terraform fmt -check -recursive infra/terraform
+
+      - name: Terraform init
+        working-directory: infra/terraform
+        run: terraform init -backend=false
+
+      - name: Terraform validate
+        working-directory: infra/terraform
+        run: terraform validate
+
+      - name: Ansible syntax check
+        working-directory: infra/ansible
+        run: ansible-playbook --syntax-check -i inventory/hosts.ini.example site.yml

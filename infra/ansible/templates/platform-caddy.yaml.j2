@@ -1,0 +1,65 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ platform_caddy_name }}
+  namespace: {{ edge_namespace }}
+data:
+  Caddyfile: |
+    :80 {
+      encode gzip
+
+      @api path {{ platform_caddy_backend_base_path }}*
+      handle @api {
+        reverse_proxy http://{{ idea_backend_name }}.{{ idea_namespace }}.svc.cluster.local:{{ idea_backend_service_port }}
+      }
+
+      handle {
+        reverse_proxy http://{{ idea_frontend_name }}.{{ idea_namespace }}.svc.cluster.local:{{ idea_frontend_service_port }}
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ platform_caddy_name }}
+  namespace: {{ edge_namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ platform_caddy_name }}
+  template:
+    metadata:
+      labels:
+        app: {{ platform_caddy_name }}
+    spec:
+      containers:
+        - name: caddy
+          image: {{ platform_caddy_image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+              name: http
+          volumeMounts:
+            - name: caddy-config
+              mountPath: /etc/caddy/Caddyfile
+              subPath: Caddyfile
+      volumes:
+        - name: caddy-config
+          configMap:
+            name: {{ platform_caddy_name }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ platform_caddy_name }}
+  namespace: {{ edge_namespace }}
+spec:
+  selector:
+    app: {{ platform_caddy_name }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+  type: ClusterIP
+

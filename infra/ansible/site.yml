@@ -1,0 +1,32 @@
+- name: Install idea platform MVP
+  hosts: platform_targets
+  become: false
+  gather_facts: true
+  vars_files:
+    - vars/platform.defaults.yml
+
+  pre_tasks:
+    - name: Assert supported operating system
+      ansible.builtin.assert:
+        that:
+          - ansible_system in ["Linux", "Darwin"]
+          - ansible_system != "Linux" or (ansible_os_family == "Debian" and ansible_distribution == "Ubuntu")
+        fail_msg: "This MVP playbook currently supports Ubuntu Linux and macOS only."
+
+    - name: Assert supported runtime
+      ansible.builtin.assert:
+        that:
+          - platform_container_runtime == "docker"
+        fail_msg: "This MVP playbook currently supports only Docker."
+
+  roles:
+    - role: base_runtime
+      tags: ["base", "runtime", "tooling"]
+    - role: kind_cluster
+      tags: ["kind", "cluster"]
+    - role: cluster_addons
+      tags: ["addons", "argocd", "monitoring", "data", "vault"]
+    - role: platform_edge
+      tags: ["edge", "caddy", "cloudflared", "cloudflare"]
+    - role: idea_platform
+      tags: ["idea", "app"]

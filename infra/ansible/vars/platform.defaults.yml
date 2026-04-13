@@ -1,0 +1,90 @@
+platform_admin_user: root
+platform_container_runtime: docker
+platform_is_darwin: "{{ ansible_system == 'Darwin' }}"
+platform_user_home: "{{ ansible_user_dir | default(ansible_env.HOME) }}"
+platform_cli_path: "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/sbin:/usr/sbin:/sbin"
+platform_kubeconfig_path: "{{ (ansible_system == 'Darwin') | ternary(platform_user_home ~ '/.kube/config', '/root/.kube/config') }}"
+platform_prereq_packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - git
+  - gnupg
+  - jq
+  - lsb-release
+  - python3-pip
+  - unzip
+
+kind_cluster_name: idea
+kind_node_image: kindest/node:v1.30.0
+kind_version: v0.23.0
+kubectl_version: v1.30.3
+helm_version: v3.15.4
+argocd_version: v2.11.7
+
+enable_monitoring: true
+enable_vault: true
+enable_cloudflared: false
+enable_cloudflare_reconciliation: false
+
+idea_base_domain: idea.local
+idea_namespace: idea-system
+edge_namespace: edge-system
+monitoring_namespace: monitoring
+data_namespace: idea-data
+vault_namespace: vault
+
+idea_frontend_name: idea-frontend
+idea_backend_name: idea-backend
+gitops_repo_url: ""
+gitops_repo_branch: main
+gitops_repo_path: gitops/idea-platform/workloads
+gitops_repo_username: x-access-token
+gitops_repo_token: ""
+idea_frontend_replicas: 1
+idea_backend_replicas: 1
+idea_frontend_container_port: 80
+idea_frontend_service_port: 80
+idea_backend_container_port: 8080
+idea_backend_service_port: 8080
+idea_backend_env:
+  HTTP_PORT: "8080"
+  HTTP_RESPONSE: '{"status":"ok","service":"idea-backend"}'
+idea_frontend_env: {}
+
+platform_caddy_image: caddy:2.8.4
+platform_caddy_name: platform-caddy
+platform_caddy_backend_base_path: /api
+
+cloudflared_image: cloudflare/cloudflared:2024.8.2
+cloudflared_tunnel_token: ""
+cloudflare_api_base_url: https://api.cloudflare.com/client/v4
+cloudflare_api_token: ""
+cloudflare_account_id: ""
+cloudflare_zone_id: ""
+cloudflare_public_subdomain: idea
+cloudflare_tunnel_name: idea-platform
+cloudflare_admin_allowed_ips: []
+cloudflare_waf_rule_ref: idea-admin-ip-allowlist
+cloudflare_waf_rule_description: Allow only ADMIN_IP traffic to the public idea hostname
+
+postgresql_release_name: idea-postgresql
+postgresql_image_repository: postgres
+postgresql_image_tag: "16-alpine"
+postgresql_username: idea
+postgresql_password: change-me-postgres
+postgresql_database: idea
+postgresql_storage_size: 8Gi
+
+vault_release_name: idea-vault
+vault_chart_version: 0.28.1
+vault_dev_root_token: change-me-root
+
+kube_prometheus_release_name: kube-prometheus-stack
+kube_prometheus_chart_version: 60.4.0
+
+platform_homebrew_formulae:
+  - kind
+  - helm
+  - kubernetes-cli
+  - jq

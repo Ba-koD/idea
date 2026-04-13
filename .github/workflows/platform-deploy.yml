@@ -1,0 +1,226 @@
+name: Deploy Platform MVP
+
+on:
+  workflow_dispatch:
+    inputs:
+      ansible_tags:
+        description: "Optional comma-separated Ansible tags."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on:
+      - self-hosted
+      - macOS
+    env:
+      ANSIBLE_CONFIG: ${{ github.workspace }}/infra/ansible/ansible.cfg
+      ANSIBLE_HOST_KEY_CHECKING: "False"
+      ANSIBLE_LOCAL_TEMP: /tmp/ansible-local
+      ANSIBLE_REMOTE_TEMP: /tmp/ansible-remote
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Ansible
+        run: python3 -m pip install ansible-core
+
+      - name: Start SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.PLATFORM_SSH_PRIVATE_KEY }}
+
+      - name: Terraform init
+        working-directory: infra/terraform
+        run: terraform init -backend=false
+
+      - name: Generate Terraform vars from GitHub configuration
+        working-directory: infra/terraform
+        env:
+          PLATFORM_TARGET_HOST: ${{ secrets.PLATFORM_TARGET_HOST }}
+          PLATFORM_TARGET_USER: ${{ secrets.PLATFORM_TARGET_USER }}
+          PLATFORM_TARGET_PORT: ${{ vars.PLATFORM_TARGET_PORT }}
+          PLATFORM_TARGET_BECOME: ${{ vars.PLATFORM_TARGET_BECOME }}
+          PLATFORM_ENVIRONMENT_NAME: ${{ vars.PLATFORM_ENVIRONMENT_NAME }}
+          PLATFORM_TARGET_NAME: ${{ vars.PLATFORM_TARGET_NAME }}
+          PLATFORM_CONTAINER_RUNTIME: ${{ vars.PLATFORM_CONTAINER_RUNTIME }}
+          PLATFORM_IDEA_BASE_DOMAIN: ${{ vars.PLATFORM_IDEA_BASE_DOMAIN }}
+          PLATFORM_KIND_CLUSTER_NAME: ${{ vars.PLATFORM_KIND_CLUSTER_NAME }}
+          PLATFORM_KIND_NODE_IMAGE: ${{ vars.PLATFORM_KIND_NODE_IMAGE }}
+          PLATFORM_KIND_VERSION: ${{ vars.PLATFORM_KIND_VERSION }}
+          PLATFORM_KUBECTL_VERSION: ${{ vars.PLATFORM_KUBECTL_VERSION }}
+          PLATFORM_HELM_VERSION: ${{ vars.PLATFORM_HELM_VERSION }}
+          PLATFORM_ARGOCD_VERSION: ${{ vars.PLATFORM_ARGOCD_VERSION }}
+          PLATFORM_ENABLE_MONITORING: ${{ vars.PLATFORM_ENABLE_MONITORING }}
+          PLATFORM_ENABLE_VAULT: ${{ vars.PLATFORM_ENABLE_VAULT }}
+          PLATFORM_ENABLE_CLOUDFLARED: ${{ vars.PLATFORM_ENABLE_CLOUDFLARED }}
+          PLATFORM_ENABLE_CLOUDFLARE_RECONCILIATION: ${{ vars.PLATFORM_ENABLE_CLOUDFLARE_RECONCILIATION }}
+          PLATFORM_CADDY_BACKEND_BASE_PATH: ${{ vars.PLATFORM_CADDY_BACKEND_BASE_PATH }}
+          PLATFORM_IDEA_NAMESPACE: ${{ vars.PLATFORM_IDEA_NAMESPACE }}
+          PLATFORM_EDGE_NAMESPACE: ${{ vars.PLATFORM_EDGE_NAMESPACE }}
+          PLATFORM_MONITORING_NAMESPACE: ${{ vars.PLATFORM_MONITORING_NAMESPACE }}
+          PLATFORM_DATA_NAMESPACE: ${{ vars.PLATFORM_DATA_NAMESPACE }}
+          PLATFORM_VAULT_NAMESPACE: ${{ vars.PLATFORM_VAULT_NAMESPACE }}
+          PLATFORM_CLOUDFLARE_ACCOUNT_ID: ${{ vars.PLATFORM_CLOUDFLARE_ACCOUNT_ID }}
+          PLATFORM_CLOUDFLARE_ZONE_ID: ${{ vars.PLATFORM_CLOUDFLARE_ZONE_ID }}
+          PLATFORM_CLOUDFLARE_PUBLIC_SUBDOMAIN: ${{ vars.PLATFORM_CLOUDFLARE_PUBLIC_SUBDOMAIN }}
+          PLATFORM_CLOUDFLARE_TUNNEL_NAME: ${{ vars.PLATFORM_CLOUDFLARE_TUNNEL_NAME }}
+          PLATFORM_CLOUDFLARE_ADMIN_ALLOWED_IPS: ${{ vars.PLATFORM_CLOUDFLARE_ADMIN_ALLOWED_IPS }}
+          PLATFORM_GITOPS_REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
+          PLATFORM_GITOPS_REPO_BRANCH: ${{ github.ref_name }}
+          PLATFORM_GITOPS_REPO_PATH: ${{ vars.PLATFORM_GITOPS_REPO_PATH }}
+          PLATFORM_GITOPS_REPO_USERNAME: ${{ vars.PLATFORM_GITOPS_REPO_USERNAME }}
+          PLATFORM_POSTGRESQL_PASSWORD: ${{ secrets.PLATFORM_POSTGRESQL_PASSWORD }}
+          PLATFORM_VAULT_DEV_ROOT_TOKEN: ${{ secrets.PLATFORM_VAULT_DEV_ROOT_TOKEN }}
+          PLATFORM_CLOUDFLARED_TUNNEL_TOKEN: ${{ secrets.PLATFORM_CLOUDFLARED_TUNNEL_TOKEN }}
+          PLATFORM_CLOUDFLARE_API_TOKEN: ${{ secrets.PLATFORM_CLOUDFLARE_API_TOKEN }}
+          PLATFORM_GITOPS_REPO_TOKEN: ${{ secrets.PLATFORM_GITOPS_REPO_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          missing = []
+
+          def get_env(name: str, default: str | None = None) -> str | None:
+            value = os.getenv(name, "")
+            if value == "":
+              return default
+            return value
+
+          def require_env(name: str) -> str:
+            value = get_env(name)
+            if value is None:
+              missing.append(name)
+              return ""
+            return value
+
+          def parse_bool(name: str, default: bool) -> bool:
+            value = get_env(name)
+            if value is None:
+              return default
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+              return True
+            if normalized in {"0", "false", "no", "off"}:
+              return False
+            raise SystemExit(f"Invalid boolean for {name}: {value}")
+
+          def parse_optional_bool(name: str) -> bool | None:
+            value = get_env(name)
+            if value is None:
+              return None
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+              return True
+            if normalized in {"0", "false", "no", "off"}:
+              return False
+            raise SystemExit(f"Invalid boolean for {name}: {value}")
+
+          def parse_csv(name: str) -> list[str]:
+            value = get_env(name, "")
+            if not value:
+              return []
+            return [item.strip() for item in value.split(",") if item.strip()]
+
+          enable_cloudflared = parse_bool("PLATFORM_ENABLE_CLOUDFLARED", False)
+          explicit_cloudflare_reconciliation = parse_optional_bool("PLATFORM_ENABLE_CLOUDFLARE_RECONCILIATION")
+          cloudflare_api_token = get_env("PLATFORM_CLOUDFLARE_API_TOKEN", "")
+          cloudflared_tunnel_token = get_env("PLATFORM_CLOUDFLARED_TUNNEL_TOKEN", "")
+          if explicit_cloudflare_reconciliation is None:
+            enable_cloudflare_reconciliation = enable_cloudflared and bool(cloudflare_api_token)
+          else:
+            enable_cloudflare_reconciliation = explicit_cloudflare_reconciliation
+
+          tfvars = {
+            "environment_name": get_env("PLATFORM_ENVIRONMENT_NAME", "platform"),
+            "target_name": get_env("PLATFORM_TARGET_NAME", "idea-platform-host"),
+            "target_host": require_env("PLATFORM_TARGET_HOST"),
+            "target_port": int(get_env("PLATFORM_TARGET_PORT", "22")),
+            "target_user": require_env("PLATFORM_TARGET_USER"),
+            "target_become": parse_bool("PLATFORM_TARGET_BECOME", False),
+            "platform_container_runtime": get_env("PLATFORM_CONTAINER_RUNTIME", "docker"),
+            "idea_base_domain": get_env("PLATFORM_IDEA_BASE_DOMAIN", "idea.local"),
+            "kind_cluster_name": get_env("PLATFORM_KIND_CLUSTER_NAME", "idea"),
+            "kind_node_image": get_env("PLATFORM_KIND_NODE_IMAGE", "kindest/node:v1.30.0"),
+            "kind_version": get_env("PLATFORM_KIND_VERSION", "v0.23.0"),
+            "kubectl_version": get_env("PLATFORM_KUBECTL_VERSION", "v1.30.3"),
+            "helm_version": get_env("PLATFORM_HELM_VERSION", "v3.15.4"),
+            "argocd_version": get_env("PLATFORM_ARGOCD_VERSION", "v2.11.7"),
+            "enable_monitoring": parse_bool("PLATFORM_ENABLE_MONITORING", True),
+            "enable_vault": parse_bool("PLATFORM_ENABLE_VAULT", True),
+            "enable_cloudflared": enable_cloudflared,
+            "enable_cloudflare_reconciliation": enable_cloudflare_reconciliation,
+            "platform_caddy_backend_base_path": get_env("PLATFORM_CADDY_BACKEND_BASE_PATH", "/api"),
+            "idea_namespace": get_env("PLATFORM_IDEA_NAMESPACE", "idea-system"),
+            "edge_namespace": get_env("PLATFORM_EDGE_NAMESPACE", "edge-system"),
+            "monitoring_namespace": get_env("PLATFORM_MONITORING_NAMESPACE", "monitoring"),
+            "data_namespace": get_env("PLATFORM_DATA_NAMESPACE", "idea-data"),
+            "vault_namespace": get_env("PLATFORM_VAULT_NAMESPACE", "vault"),
+            "gitops_repo_url": require_env("PLATFORM_GITOPS_REPO_URL"),
+            "gitops_repo_branch": get_env("PLATFORM_GITOPS_REPO_BRANCH", "main"),
+            "gitops_repo_path": get_env("PLATFORM_GITOPS_REPO_PATH", "gitops/idea-platform/workloads"),
+            "gitops_repo_username": get_env("PLATFORM_GITOPS_REPO_USERNAME", "x-access-token"),
+            "postgresql_password": require_env("PLATFORM_POSTGRESQL_PASSWORD"),
+            "vault_dev_root_token": require_env("PLATFORM_VAULT_DEV_ROOT_TOKEN"),
+          }
+
+          gitops_repo_token = get_env("PLATFORM_GITOPS_REPO_TOKEN", "")
+          if gitops_repo_token:
+            tfvars["gitops_repo_token"] = gitops_repo_token
+
+          if enable_cloudflare_reconciliation:
+            if not enable_cloudflared:
+              raise SystemExit("PLATFORM_ENABLE_CLOUDFLARE_RECONCILIATION=true requires PLATFORM_ENABLE_CLOUDFLARED=true")
+            tfvars["cloudflare_api_token"] = cloudflare_api_token or require_env("PLATFORM_CLOUDFLARE_API_TOKEN")
+            tfvars["cloudflare_account_id"] = require_env("PLATFORM_CLOUDFLARE_ACCOUNT_ID")
+            tfvars["cloudflare_zone_id"] = require_env("PLATFORM_CLOUDFLARE_ZONE_ID")
+            tfvars["cloudflare_public_subdomain"] = get_env("PLATFORM_CLOUDFLARE_PUBLIC_SUBDOMAIN", "idea")
+            tfvars["cloudflare_tunnel_name"] = get_env("PLATFORM_CLOUDFLARE_TUNNEL_NAME", "idea-platform")
+            tfvars["cloudflare_admin_allowed_ips"] = parse_csv("PLATFORM_CLOUDFLARE_ADMIN_ALLOWED_IPS")
+            if not tfvars["cloudflare_admin_allowed_ips"]:
+              missing.append("PLATFORM_CLOUDFLARE_ADMIN_ALLOWED_IPS")
+          elif enable_cloudflared:
+            tfvars["cloudflared_tunnel_token"] = cloudflared_tunnel_token or require_env("PLATFORM_CLOUDFLARED_TUNNEL_TOKEN")
+
+          if missing:
+            joined = ", ".join(sorted(set(missing)))
+            raise SystemExit(f"Missing required GitHub configuration: {joined}")
+
+          Path("github.auto.tfvars.json").write_text(json.dumps(tfvars, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Terraform apply
+        working-directory: infra/terraform
+        run: terraform apply -auto-approve -var-file=github.auto.tfvars.json
+
+      - name: Render Ansible inputs
+        working-directory: infra/terraform
+        run: |
+          mkdir -p ../ansible/generated
+          terraform output -raw ansible_inventory_ini > ../ansible/generated/inventory.ini
+          terraform output -json ansible_extra_vars > ../ansible/generated/extra-vars.json
+
+      - name: Run Ansible platform install
+        working-directory: infra/ansible
+        run: |
+          if [ -n "${{ github.event.inputs.ansible_tags }}" ]; then
+            ansible-playbook -i generated/inventory.ini site.yml --extra-vars @generated/extra-vars.json --tags "${{ github.event.inputs.ansible_tags }}"
+          else
+            ansible-playbook -i generated/inventory.ini site.yml --extra-vars @generated/extra-vars.json
+          fi
