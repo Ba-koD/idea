@@ -34,21 +34,174 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
+      - name: Bootstrap runner toolchain
+        run: |
+          set -euo pipefail
+
+          {
+            echo /opt/homebrew/bin
+            echo /opt/homebrew/sbin
+            echo /Applications/Docker.app/Contents/Resources/bin
+            echo "$RUNNER_TEMP/bootstrap/bin"
+          } >> "$GITHUB_PATH"
+
+          export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/Applications/Docker.app/Contents/Resources/bin:$RUNNER_TEMP/bootstrap/bin:$PATH"
+          mkdir -p "$RUNNER_TEMP/bootstrap/bin"
+
+          /opt/homebrew/bin/brew --version
+
+          TERRAFORM_VERSION="$(python3 - <<'PY'
+          import json
+          import urllib.request
+
+          with urllib.request.urlopen("https://checkpoint-api.hashicorp.com/v1/check/terraform") as response:
+              payload = json.load(response)
+          print(payload["current_version"])
+          PY
+          )"
+
+          curl -fsSL -o "$RUNNER_TEMP/terraform.zip" "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_darwin_arm64.zip"
+          unzip -oq "$RUNNER_TEMP/terraform.zip" -d "$RUNNER_TEMP/bootstrap/bin"
+          chmod +x "$RUNNER_TEMP/bootstrap/bin/terraform"
+
+          python3 --version
+          "$RUNNER_TEMP/bootstrap/bin/terraform" version
+          docker version
 
       - name: Install Ansible
         run: |
-          python3 -m pip install --user ansible-core
-          python3 - <<'PY' >> "$GITHUB_PATH"
-          import site
-          print(f"{site.USER_BASE}/bin")
-          PY
+          set -euo pipefail
+
+          export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/Applications/Docker.app/Contents/Resources/bin:$RUNNER_TEMP/bootstrap/bin:$PATH"
+          python3 -m venv "$RUNNER_TEMP/ansible-venv"
+          "$RUNNER_TEMP/ansible-venv/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/ansible-venv/bin/python" -m pip install ansible-core
+          echo "$RUNNER_TEMP/ansible-venv/bin" >> "$GITHUB_PATH"
 
       - name: Start SSH agent
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.PLATFORM_SSH_PRIVATE_KEY }}
+
+      - name: Preflight SSH connectivity
+        env:
+          PLATFORM_TARGET_HOST: ${{ secrets.PLATFORM_TARGET_HOST }}
+          PLATFORM_TARGET_USER: ${{ secrets.PLATFORM_TARGET_USER }}
+          PLATFORM_TARGET_PORT: ${{ vars.PLATFORM_TARGET_PORT }}
+        run: |
+          set -euo pipefail
+
+          target_port="${PLATFORM_TARGET_PORT:-22}"
+          ssh \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=no \
+            -p "$target_port" \
+            "${PLATFORM_TARGET_USER}@${PLATFORM_TARGET_HOST}" \
+            'uname -s && id -un'
+
+      - name: Preflight GitOps repository access
+        env:
+          GITOPS_REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
+          GITOPS_REPO_USERNAME: ${{ vars.PLATFORM_GITOPS_REPO_USERNAME }}
+          GITOPS_REPO_TOKEN: ${{ secrets.PLATFORM_GITOPS_REPO_TOKEN }}
+          GITHUB_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          set -euo pipefail
+
+          gitops_username="${GITOPS_REPO_USERNAME:-x-access-token}"
+          if [ "${GITHUB_REPOSITORY_PRIVATE}" = "true" ]; then
+            if [ -z "${GITOPS_REPO_TOKEN}" ]; then
+              echo "PLATFORM_GITOPS_REPO_TOKEN is required for a private GitOps repository."
+              exit 1
+            fi
+            git ls-remote "https://${gitops_username}:${GITOPS_REPO_TOKEN}@${GITOPS_REPO_URL#https://}" HEAD >/dev/null
+          else
+            git ls-remote "$GITOPS_REPO_URL" HEAD >/dev/null
+          fi
+
+      - name: Preflight Cloudflare API access
+        env:
+          PLATFORM_ENABLE_CLOUDFLARED: ${{ vars.PLATFORM_ENABLE_CLOUDFLARED }}
+          PLATFORM_CLOUDFLARE_API_TOKEN: ${{ secrets.PLATFORM_CLOUDFLARE_API_TOKEN }}
+          PLATFORM_CLOUDFLARE_ACCOUNT_ID: ${{ vars.PLATFORM_CLOUDFLARE_ACCOUNT_ID }}
+          PLATFORM_CLOUDFLARE_ZONE_ID: ${{ vars.PLATFORM_CLOUDFLARE_ZONE_ID }}
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          def parse_bool(value: str | None) -> bool:
+              if not value:
+                  return False
+              normalized = value.strip().lower()
+              if normalized in {"1", "true", "yes", "on"}:
+                  return True
+              if normalized in {"0", "false", "no", "off"}:
+                  return False
+              raise SystemExit(f"Invalid boolean value: {value}")
+
+          def call(url: str, token: str) -> tuple[int, dict]:
+              request = urllib.request.Request(
+                  url,
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Content-Type": "application/json",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(request) as response:
+                      status = response.status
+                      payload = json.load(response)
+              except urllib.error.HTTPError as exc:
+                  status = exc.code
+                  try:
+                      payload = json.load(exc)
+                  except Exception:
+                      payload = {"success": False, "errors": [{"message": exc.reason}]}
+              return status, payload
+
+          if not parse_bool(os.getenv("PLATFORM_ENABLE_CLOUDFLARED")):
+              print("cloudflare-preflight-skipped")
+              raise SystemExit(0)
+
+          token = os.getenv("PLATFORM_CLOUDFLARE_API_TOKEN", "")
+          if not token:
+              print("cloudflare-api-preflight-skipped-no-token")
+              raise SystemExit(0)
+
+          account_id = os.getenv("PLATFORM_CLOUDFLARE_ACCOUNT_ID", "")
+          zone_id = os.getenv("PLATFORM_CLOUDFLARE_ZONE_ID", "")
+          required = {
+              "PLATFORM_CLOUDFLARE_ACCOUNT_ID": account_id,
+              "PLATFORM_CLOUDFLARE_ZONE_ID": zone_id,
+          }
+          missing = [name for name, value in required.items() if not value]
+          if missing:
+              raise SystemExit(f"Missing required Cloudflare configuration: {', '.join(missing)}")
+
+          checks = [
+              ("token verification", "https://api.cloudflare.com/client/v4/user/tokens/verify", {200}),
+              ("tunnel access", f"https://api.cloudflare.com/client/v4/accounts/{account_id}/cfd_tunnel", {200}),
+              ("dns access", f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?per_page=1", {200}),
+              ("waf access", f"https://api.cloudflare.com/client/v4/zones/{zone_id}/rulesets/phases/http_request_firewall_custom/entrypoint", {200, 404}),
+          ]
+
+          for label, url, allowed_statuses in checks:
+              status, payload = call(url, token)
+              if status not in allowed_statuses:
+                  raise SystemExit(f"Cloudflare {label} failed with status {status}: {payload}")
+              if label == "waf access" and status == 404:
+                  continue
+              if not payload.get("success", False):
+                  raise SystemExit(f"Cloudflare {label} failed with status {status}: {payload}")
+
+          print("cloudflare-preflight-ok")
+          PY
 
       - name: Terraform init
         working-directory: infra/terraform
