@@ -91,12 +91,20 @@ jobs:
         run: |
           set -euo pipefail
 
-          target_port="${PLATFORM_TARGET_PORT:-22}"
+          target_host="$(printf '%s' "${PLATFORM_TARGET_HOST:-}" | tr -d '\r' | xargs)"
+          target_user="$(printf '%s' "${PLATFORM_TARGET_USER:-}" | tr -d '\r' | xargs)"
+          target_port="$(printf '%s' "${PLATFORM_TARGET_PORT:-22}" | tr -d '\r' | xargs)"
+
+          if [ -z "$target_host" ] || [ -z "$target_user" ]; then
+            echo "PLATFORM_TARGET_HOST and PLATFORM_TARGET_USER must be non-empty after trimming whitespace."
+            exit 1
+          fi
+
           ssh \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=no \
             -p "$target_port" \
-            "${PLATFORM_TARGET_USER}@${PLATFORM_TARGET_HOST}" \
+            "${target_user}@${target_host}" \
             'uname -s && id -un'
 
       - name: Preflight GitOps repository access
@@ -108,15 +116,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          gitops_username="${GITOPS_REPO_USERNAME:-x-access-token}"
+          gitops_repo_url="$(printf '%s' "${GITOPS_REPO_URL:-}" | tr -d '\r' | xargs)"
+          gitops_username="$(printf '%s' "${GITOPS_REPO_USERNAME:-x-access-token}" | tr -d '\r' | xargs)"
+          gitops_repo_token="$(printf '%s' "${GITOPS_REPO_TOKEN:-}" | tr -d '\r')"
+
           if [ "${GITHUB_REPOSITORY_PRIVATE}" = "true" ]; then
-            if [ -z "${GITOPS_REPO_TOKEN}" ]; then
+            if [ -z "${gitops_repo_token}" ]; then
               echo "PLATFORM_GITOPS_REPO_TOKEN is required for a private GitOps repository."
               exit 1
             fi
-            git ls-remote "https://${gitops_username}:${GITOPS_REPO_TOKEN}@${GITOPS_REPO_URL#https://}" HEAD >/dev/null
+            git ls-remote "https://${gitops_username}:${gitops_repo_token}@${gitops_repo_url#https://}" HEAD >/dev/null
           else
-            git ls-remote "$GITOPS_REPO_URL" HEAD >/dev/null
+            git ls-remote "$gitops_repo_url" HEAD >/dev/null
           fi
 
       - name: Preflight Cloudflare API access
@@ -131,7 +142,6 @@ jobs:
           python3 - <<'PY'
           import json
           import os
-          import sys
           import urllib.error
           import urllib.request
 
@@ -144,6 +154,15 @@ jobs:
               if normalized in {"0", "false", "no", "off"}:
                   return False
               raise SystemExit(f"Invalid boolean value: {value}")
+
+          def get_env(name: str, default: str | None = None) -> str | None:
+              value = os.getenv(name)
+              if value is None:
+                  return default
+              normalized = value.replace("\r", "").strip()
+              if normalized == "":
+                  return default
+              return normalized
 
           def call(url: str, token: str) -> tuple[int, dict]:
               request = urllib.request.Request(
@@ -165,17 +184,17 @@ jobs:
                       payload = {"success": False, "errors": [{"message": exc.reason}]}
               return status, payload
 
-          if not parse_bool(os.getenv("PLATFORM_ENABLE_CLOUDFLARED")):
+          if not parse_bool(get_env("PLATFORM_ENABLE_CLOUDFLARED")):
               print("cloudflare-preflight-skipped")
               raise SystemExit(0)
 
-          token = os.getenv("PLATFORM_CLOUDFLARE_API_TOKEN", "")
+          token = get_env("PLATFORM_CLOUDFLARE_API_TOKEN", "")
           if not token:
               print("cloudflare-api-preflight-skipped-no-token")
               raise SystemExit(0)
 
-          account_id = os.getenv("PLATFORM_CLOUDFLARE_ACCOUNT_ID", "")
-          zone_id = os.getenv("PLATFORM_CLOUDFLARE_ZONE_ID", "")
+          account_id = get_env("PLATFORM_CLOUDFLARE_ACCOUNT_ID", "")
+          zone_id = get_env("PLATFORM_CLOUDFLARE_ZONE_ID", "")
           required = {
               "PLATFORM_CLOUDFLARE_ACCOUNT_ID": account_id,
               "PLATFORM_CLOUDFLARE_ZONE_ID": zone_id,
@@ -257,10 +276,13 @@ jobs:
           missing = []
 
           def get_env(name: str, default: str | None = None) -> str | None:
-            value = os.getenv(name, "")
-            if value == "":
+            value = os.getenv(name)
+            if value is None:
               return default
-            return value
+            normalized = value.replace("\r", "").strip()
+            if normalized == "":
+              return default
+            return normalized
 
           def require_env(name: str) -> str:
             value = get_env(name)
