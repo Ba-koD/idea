@@ -1,6 +1,11 @@
 name: Deploy Platform MVP
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/platform-deploy.yml
   workflow_dispatch:
     inputs:
       ansible_tags:
@@ -13,6 +18,7 @@ permissions:
 
 jobs:
   deploy:
+    if: github.event_name == 'workflow_dispatch'
     runs-on:
       - self-hosted
       - macOS
