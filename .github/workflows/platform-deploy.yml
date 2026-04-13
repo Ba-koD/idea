@@ -37,13 +37,13 @@ jobs:
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
       - name: Install Ansible
-        run: python3 -m pip install ansible-core
+        run: |
+          python3 -m pip install --user ansible-core
+          python3 - <<'PY' >> "$GITHUB_PATH"
+          import site
+          print(f"{site.USER_BASE}/bin")
+          PY
 
       - name: Start SSH agent
         uses: webfactory/ssh-agent@v0.9.0
