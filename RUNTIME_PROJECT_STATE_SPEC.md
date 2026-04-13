@@ -2,29 +2,29 @@
 
 ## 1. Purpose
 
-이 문서는 `idea` 웹 UI가 런타임에 받아야 하는 배포 입력의 canonical schema를 정의한다.  
-핵심 원칙은 하나다.
+이 문서는 `idea` 웹 UI와 CLI가 동일하게 사용하는 런타임 배포 입력 schema를 정의한다.
 
-- app repo에 배포 설정을 박아두지 않고, `tmp` 서비스가 웹 UI의 `Project State`를 기준으로 Argo CD용 GitOps 산출물을 자동 생성한다
+- app repo에 배포 설정을 박아두지 않는다
+- `tmp` 서비스는 웹 UI 또는 CLI로 받은 `Project State`를 canonical source로 사용한다
+- `tmp`는 `Project State + repo 구조`를 읽고 GitOps 산출물을 생성한다
+- Argo CD는 그 GitOps 산출물만 sync한다
 
-즉 다음 값들은 repo 내부 파일보다 웹 UI 입력이 우선한다.
+즉 같은 값이 repo와 UI 양쪽에 있으면 항상 UI `Project State`가 우선한다.
 
-- app repo URL / ref
-- build context / Dockerfile path
-- Argo CD 연결 정보
-- dev / stage / prod target profile
-- Caddy hostname 및 `/api` 라우팅
-- Cloudflare 정책
-- 환경별 env / secret
+중요한 점:
+
+- app repo는 독립적인 웹 서비스 소스 저장소다
+- IP allowlist, Cloudflare, Ncloud target, 실제 운영 secret, env별 hostname은 app repo가 아니라 `tmp`가 소유한다
+- 같은 app repo를 `dev / stage / prod`에 재사용하는 것은 `tmp`가 환경별 `Project State`를 다르게 적용해서 구현한다
 
 ---
 
 ## 2. Canonical Principle
 
 - 런타임 배포 입력은 모두 versioned `Project State`에 저장한다.
-- `tmp`는 `Project State + repo B 구조`를 읽고 GitOps manifest를 생성한다.
-- Argo CD는 그 manifest만 sync한다.
-- repo 내부 `docker-compose.yml`과 선택적 선언 파일은 참고 입력일 뿐이다.
+- 웹 UI와 CLI import는 동일한 schema를 사용한다.
+- `tmp`는 `Project State + repo 구조`를 읽고 build/push, manifest 생성, Cloudflare desired state 생성을 수행한다.
+- repo 내부 `docker-compose.yml`과 optional metadata는 참고 입력일 뿐이다.
 - 같은 정보가 UI와 repo 양쪽에 있으면 UI가 우선한다.
 
 ---
@@ -33,10 +33,10 @@
 
 ```yaml
 project:
-  name: my-service
-  app_repo_url: https://github.com/acme/my-service.git
+  name: repo-example
+  app_repo_url: https://github.com/Ba-koD/repo_example.git
   git_ref: main
-  repo_access_secret_ref: github-app-token
+  repo_access_secret_ref: github-repo-example-token
 
 build:
   source_strategy: platform_build_runner
@@ -47,53 +47,62 @@ build:
 
 argo:
   project_name: default
-  destination_name: aws-eks-dev
+  destination_name: ncloud-nks-dev
   destination_server: https://kubernetes.default.svc
-  gitops_repo_url: https://github.com/acme/idea-gitops.git
+  gitops_repo_url: https://github.com/Ba-koD/idea.git
   gitops_repo_branch: main
-  gitops_repo_path: workloads/my-service
+  gitops_repo_path: gitops/generated/repo-example
   gitops_repo_access_secret_ref: gitops-repo-token
+
+cloudflare:
+  enabled: true
+  account_id: 2052eb94f7b555bd3bf9db83c1f4edbf
+  zone_id: aaafd11f9c6912ba37c1d52a69b78398
+  base_domain: rnen.kr
+  public_subdomain_prefix: repo-example
+  api_token_secret_ref: cloudflare-api-token
+  tunnel_name: repo-example-platform
+  route_mode: platform_caddy
 
 targets:
   dev:
-    provider: aws
-    cluster_type: eks
-    namespace: my-service-dev
+    provider: ncloud
+    cluster_type: nks
+    namespace: repo-example-dev
     service_port: 80
-    aws:
-      region: ap-northeast-2
-      account_id: "123456789012"
-      auth_method: access_key
-      access_key_secret_ref: aws-dev-key
-      secret_key_secret_ref: aws-dev-secret
+    ncloud:
+      region_code: KR
       cluster_name: idea-dev
+      auth_method: access_key
+      access_key_secret_ref: ncloud-dev-access-key
+      secret_key_secret_ref: ncloud-dev-secret-key
   stage:
-    provider: aws
-    cluster_type: eks
-    namespace: my-service-stage
+    provider: ncloud
+    cluster_type: nks
+    namespace: repo-example-stage
     service_port: 80
-    aws:
-      region: ap-northeast-2
-      account_id: "123456789012"
-      auth_method: assume_role
-      role_arn: arn:aws:iam::123456789012:role/idea-stage-deployer
+    ncloud:
+      region_code: KR
       cluster_name: idea-stage
+      auth_method: access_key
+      access_key_secret_ref: ncloud-stage-access-key
+      secret_key_secret_ref: ncloud-stage-secret-key
   prod:
-    provider: aws
-    cluster_type: eks
-    namespace: my-service-prod
+    provider: ncloud
+    cluster_type: nks
+    namespace: repo-example-prod
     service_port: 80
-    aws:
-      region: ap-northeast-2
-      account_id: "123456789012"
-      auth_method: assume_role
-      role_arn: arn:aws:iam::123456789012:role/idea-prod-deployer
+    ncloud:
+      region_code: KR
       cluster_name: idea-prod
+      auth_method: access_key
+      access_key_secret_ref: ncloud-prod-access-key
+      secret_key_secret_ref: ncloud-prod-secret-key
 
 routing:
-  dev_hostname: dev.example.com
-  stage_hostname: stage.example.com
-  prod_hostname: prod.example.com
+  dev_hostname: repo-example-dev.rnen.kr
+  stage_hostname: repo-example-stage.rnen.kr
+  prod_hostname: repo-example.rnen.kr
   entry_service_name: frontend
   backend_service_name: backend
   backend_base_path: /api
@@ -111,11 +120,11 @@ env:
 
 secrets:
   dev:
-    DATABASE_URL: secret://db-dev-url
+    EXAMPLE_API_TOKEN: secret://repo-example/dev/example-api-token
   stage:
-    DATABASE_URL: secret://db-stage-url
+    EXAMPLE_API_TOKEN: secret://repo-example/stage/example-api-token
   prod:
-    DATABASE_URL: secret://db-prod-url
+    EXAMPLE_API_TOKEN: secret://repo-example/prod/example-api-token
 
 access:
   admin_allowed_source_ips:
@@ -163,6 +172,17 @@ delivery:
 - `argo.gitops_repo_path`
 - `argo.gitops_repo_access_secret_ref`
 
+### Cloudflare
+
+- `cloudflare.enabled`
+- `cloudflare.account_id`
+- `cloudflare.zone_id`
+- `cloudflare.base_domain`
+- `cloudflare.public_subdomain_prefix`
+- `cloudflare.api_token_secret_ref`
+- `cloudflare.tunnel_name`
+- `cloudflare.route_mode`
+
 ### Deployment Targets
 
 환경별로 따로 관리한다.
@@ -193,7 +213,7 @@ delivery:
 - `env.stage`
 - `env.prod`
 
-### Secrets
+### Runtime Secrets
 
 - `secrets.dev`
 - `secrets.stage`
@@ -214,45 +234,90 @@ delivery:
 
 ---
 
-## 5. AWS Default Target Model
+## 5. Secret Input Drawer Contract
 
-기본 provider는 `aws`, 기본 cluster type은 `eks`다.
+UI는 일반 입력 폼과 별도로 `Secret Input` 영역 또는 modal/drawer를 가져야 한다.
 
-### Required AWS Fields
+이 영역에서 운영자가 값을 입력하면, UI는 평문을 직접 저장하지 않고 secret store reference로 치환해 `Project State`에 저장한다.
 
-- `aws.region`
-- `aws.account_id`
-- `aws.auth_method`
-- `aws.cluster_name`
+### Required Secret Inputs
+
+- `project.repo_access_secret_ref`
+- `argo.gitops_repo_access_secret_ref`
+- `cloudflare.api_token_secret_ref`
+- `targets.dev.ncloud.access_key_secret_ref`
+- `targets.dev.ncloud.secret_key_secret_ref`
+- `targets.stage.ncloud.access_key_secret_ref`
+- `targets.stage.ncloud.secret_key_secret_ref`
+- `targets.prod.ncloud.access_key_secret_ref`
+- `targets.prod.ncloud.secret_key_secret_ref`
+- `secrets.dev.*`
+- `secrets.stage.*`
+- `secrets.prod.*`
+
+### Optional Secret Inputs
+
+- `targets.<env>.cluster_access_secret_ref`
+- `build.registry_push_secret_ref`
+- `delivery.rollback_guard_secret_ref`
+
+### UI Behavior
+
+- 사용자는 secret key 이름과 실제 값을 입력한다.
+- 저장 후 UI는 secret ref만 다시 보여준다.
+- 이후 편집 화면에서는 기존 secret 평문을 재노출하지 않는다.
+- CLI import도 같은 secret ref naming rule을 사용한다.
+- `Cloudflare Apply` 또는 `Save and Reconcile` 동작 시 hostname, tunnel, allowlist 변경이 Cloudflare API 대상 desired state로 전달된다.
+
+---
+
+## 6. Ncloud Default Target Model
+
+기본 provider는 `ncloud`, 기본 cluster type은 `nks`다.
+
+### Required Ncloud Fields
+
+- `ncloud.region_code`
+- `ncloud.cluster_name`
+- `ncloud.auth_method`
 
 ### Supported Auth Methods
 
 #### `access_key`
 
-- `aws.access_key_secret_ref`
-- `aws.secret_key_secret_ref`
+- `ncloud.access_key_secret_ref`
+- `ncloud.secret_key_secret_ref`
 
-#### `assume_role`
+### Optional Ncloud Fields
 
-- `aws.role_arn`
-
-### Optional AWS Fields
-
-- `aws.cluster_endpoint`
-- `aws.external_id`
+- `ncloud.cluster_uuid`
+- `ncloud.vpc_no`
+- `ncloud.subnet_no`
+- `ncloud.api_endpoint`
+- `cluster_access_secret_ref`
 
 ### Runtime Meaning
 
-- `tmp`는 이 정보를 사용해 대상 EKS cluster를 식별하고 Argo CD destination 또는 cluster registration에 필요한 값을 해석한다.
-- AWS 자격증명은 UI에 평문 저장하지 않고 secret store reference로만 연결한다.
+- `tmp`는 이 정보를 사용해 대상 NKS cluster를 식별하고 Argo CD destination 또는 cluster registration에 필요한 값을 해석한다.
+- Ncloud 자격증명은 UI에 평문 저장하지 않고 secret store reference로만 연결한다.
+- `cluster_access_secret_ref`가 있으면 kubeconfig 기반 연결을 우선할 수 있다.
 
 ---
 
-## 6. On-Prem Target Model
+## 7. Secondary Target Models
 
-AWS 이외의 self-managed target도 허용한다.
+Ncloud 이외의 target도 허용한다.
 
-### Required On-Prem Fields
+### AWS
+
+- `provider: aws`
+- `cluster_type: eks`
+- `aws.region`
+- `aws.cluster_name`
+- `aws.access_key_secret_ref`
+- `aws.secret_key_secret_ref`
+
+### On-Prem
 
 - `provider: onprem`
 - `cluster_type: kubernetes`
@@ -260,13 +325,9 @@ AWS 이외의 self-managed target도 허용한다.
 - `argo.destination_name` 또는 `argo.destination_server`
 - `cluster_access_secret_ref`
 
-### Runtime Meaning
-
-- `tmp`는 저장된 kube access secret 또는 Argo CD destination mapping을 통해 target에 연결한다.
-
 ---
 
-## 7. Routing and Caddy Contract
+## 8. Routing and Caddy Contract
 
 모든 hostname과 내부 라우팅은 웹 UI에서 설정 가능해야 한다.
 
@@ -290,14 +351,34 @@ AWS 이외의 self-managed target도 허용한다.
 
 - DB는 UI에서 hostname 연결 대상으로 선택할 수 없어야 한다.
 - backend는 같은 hostname 아래 `/api`로만 외부 노출하는 것을 기본값으로 한다.
+- frontend는 내부 `localhost`가 아니라 외부 same-origin `/api`를 사용해야 한다.
 
 ---
 
-## 8. Runtime Precedence
+## 9. CLI Parity
+
+웹 UI가 없어도 같은 `Project State`를 파일로 만들어 CLI에서 import할 수 있어야 한다.
+
+### Example
+
+```bash
+python3 scripts/project_state_dry_run.py \
+  examples/repo_example.ncloud.project-state.json
+```
+
+### Meaning
+
+- UI가 저장하는 값과 CLI 파일은 같은 schema를 쓴다.
+- dry-run은 repo 접근, build path, routing, target, secret ref 누락 여부를 검증한다.
+- 실제 배포 구현이 들어가면 같은 파일이 `tmp` API 또는 worker 입력으로 그대로 사용된다.
+
+---
+
+## 10. Runtime Precedence
 
 우선순위는 아래와 같다.
 
-1. 웹 UI `Project State`
+1. 웹 UI 또는 CLI `Project State`
 2. repo B의 optional metadata
 3. compose 추론값
 
@@ -314,12 +395,11 @@ AWS 이외의 self-managed target도 허용한다.
 
 ---
 
-## 9. Non-Goals
+## 11. Non-Goals
 
-- app repo에 AWS credential을 커밋
+- app repo에 Ncloud credential을 커밋
 - app repo에 Argo CD destination을 고정
 - app repo에 prod hostname을 고정
 - app repo에 운영용 dev/stage/prod secret 저장
 - Argo CD를 임의 shell 실행기로 사용
-- Terraform/Ansible로 dev/stage/prod 앱 배포를 수행
-
+- Terraform/Ansible로 dev/stage/prod 앱 배포를 직접 수행

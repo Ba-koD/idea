@@ -17,12 +17,18 @@
 - prod는 blue-green으로 무중단 전환하고
 - Cloudflare 기반 접근 정책까지 한 곳에서 관리하는 것
 
+중요한 점:
+
+- app repo는 독립적인 웹 서비스 저장소입니다.
+- app repo 자체가 Cloudflare, IP 차단, Ncloud target, 운영 env/secret을 소유하지 않습니다.
+- 그 정책과 실제 값은 모두 `idea/tmp`가 런타임 `Project State`로 관리합니다.
+
 ## What idea Does
 
 `idea`는 다음 역할을 담당합니다.
 
 - On-Prem 환경에 `idea`, `kind`, `Argo CD`, `Caddy`, `Monitoring`, `cloudflared` 실행 기반을 설치합니다.
-- 운영자가 웹 UI에서 서비스 저장소, 환경별 `.env`, 배포 대상, Cloudflare 설정을 입력할 수 있게 합니다.
+- 운영자가 웹 UI 또는 CLI import로 서비스 저장소, 환경별 env/secret, 배포 대상, Cloudflare 설정을 입력할 수 있게 합니다.
 - 입력된 설정과 secret을 구조화 저장하고 민감값은 암호화합니다.
 - 내부 `tmp 배포 계층`이 GitOps 리소스와 Cloudflare desired state를 생성합니다.
 - Argo CD가 Kubernetes 리소스를 반영합니다.
@@ -58,12 +64,17 @@
 - 저장소 URL
 - branch 또는 tag
 - 저장소 접근 secret
+- GitOps repo 접근 secret
 - 환경별 hostname
 - entry service와 backend service 연결 정보
-- `test / stage / prod`용 `.env`
+- 환경별 env / secret
 - Cloudflare 계정 및 Tunnel 정보
 - `test`, `stage`, `admin` 접근 허용 IP
 - 배포 대상 클러스터 또는 서버
+  - 기본 provider `ncloud`
+  - 기본 cluster type `nks`
+  - `ncloud_access_key`
+  - `ncloud_secret_key`
 - prod blue-green 설정
 
 ### 3. Reconciliation
@@ -98,7 +109,7 @@ Cloudflare API 호출은 `idea`의 reconciler가 담당합니다.
 - `repo B` 코드가 바뀌는 것만으로는 바로 배포되지 않습니다.
 - 실제 배포 트리거는 GitOps manifest 변경입니다.
 - Argo CD는 `docker-compose`나 임의 host shell을 실행하지 않습니다.
-- app repo 등록, build 입력, Argo CD 연결, target 서버/클러스터 정보는 런타임 웹 UI 입력이 canonical source입니다.
+- app repo 등록, build 입력, Argo CD 연결, target 서버/클러스터 정보는 런타임 웹 UI 또는 CLI `Project State`가 canonical source입니다.
 
 ## Runtime Routing Model
 
@@ -238,9 +249,9 @@ THIRD_PARTY_API_KEY=replace-me
 
 - 환경별 `dev / stage / prod` target profile
 - 기본 provider:
-  - `aws`
-- 기본 AWS target:
-  - `eks`
+  - `ncloud`
+- 기본 cluster type:
+  - `nks`
 - 공통 입력:
   - `provider`
   - `cluster_type`
@@ -249,21 +260,29 @@ THIRD_PARTY_API_KEY=replace-me
   - `build_source_strategy`
     - `repo_b_ci`
     - `platform_build_runner`
-- AWS 입력:
-  - `aws_region`
-  - `aws_account_id`
-  - `aws_auth_method`
+- Ncloud 입력:
+  - `ncloud_region_code`
+  - `ncloud_cluster_name`
+  - `ncloud_auth_method`
     - `access_key`
-    - `assume_role`
-  - `aws_access_key_id`
-  - `aws_secret_access_key`
-  - `aws_role_arn`
-  - `aws_cluster_name`
-  - `aws_cluster_endpoint` 선택
+  - `ncloud_access_key_secret`
+  - `ncloud_secret_key_secret`
+  - `ncloud_cluster_uuid` 선택
+  - `cluster_access_secret` 선택
 - On-Prem 입력:
   - `argo_destination_name`
   - 또는 `kube_api_server`
   - `cluster_access_secret`
+
+### Secret Drawer
+
+- `repo_access_secret`
+- `gitops_repo_access_secret`
+- `ncloud_access_key_secret`
+- `ncloud_secret_key_secret`
+- 환경별 runtime secret
+
+UI는 secret 값을 저장 직후 다시 보여주지 않고 secret ref 이름만 노출합니다.
 
 ### Prod Blue-Green
 
@@ -285,6 +304,17 @@ THIRD_PARTY_API_KEY=replace-me
 - `idea UI`와 `Grafana`는 admin allowlist만 허용합니다.
 - DB는 외부 hostname 또는 Cloudflare Tunnel에 직접 노출하지 않습니다.
 - 외부 라우팅은 플랫폼 `Caddy`가 담당하고, 앱 내부 `Caddy`는 기본 필수요건이 아닙니다.
+
+## CLI Parity
+
+웹 UI가 없어도 같은 schema를 파일로 만들어 CLI에서 검증할 수 있습니다.
+
+```bash
+python3 scripts/project_state_dry_run.py \
+  examples/repo_example.ncloud.project-state.json
+```
+
+이 파일은 [RUNTIME_PROJECT_STATE_SPEC.md](/mnt/c/Users/rudgh/idea/RUNTIME_PROJECT_STATE_SPEC.md)와 같은 schema를 사용합니다.
 
 ## Export / Import
 

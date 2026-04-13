@@ -156,6 +156,7 @@
 - import는 동일한 `Project State`를 복원하고 같은 reconciliation 경로를 다시 실행해야 한다
 - secret은 export bundle 안에서 암호화된 상태로 포함되며 import 시 대상 플랫폼 키로 재암호화된다
 - import 완료 후 동일한 infra 조건이면 같은 GitOps 리소스와 같은 Cloudflare 정책이 재현되어야 한다
+- app repo는 독립적인 웹 서비스 소스 저장소이며, Cloudflare/IP 정책/Ncloud target/운영 env와 secret의 owner는 `tmp`가 가진다
 
 ### Rule 7. Network and Routing Model
 - 외부 공개 경로는 환경별 hostname 하나를 기준으로 한다
@@ -213,26 +214,31 @@
 - `admin_allowed_ips`
 - 배포 대상 서버 또는 클러스터 선택
   - 환경별 `dev / stage / prod` target profile
-  - 기본 provider `aws`
-  - 기본 AWS target `eks`
+  - 기본 provider `ncloud`
+  - 기본 cluster type `nks`
   - `provider`
   - `cluster_type`
   - `namespace`
   - `service_port`
   - `build_source_strategy`
-  - AWS:
-    - `aws_region`
-    - `aws_account_id`
-    - `aws_auth_method`
-    - `aws_access_key_id`
-    - `aws_secret_access_key`
-    - `aws_role_arn`
-    - `aws_cluster_name`
-    - `aws_cluster_endpoint`
+  - Ncloud:
+    - `ncloud_region_code`
+    - `ncloud_cluster_name`
+    - `ncloud_auth_method`
+    - `ncloud_access_key_secret`
+    - `ncloud_secret_key_secret`
+    - `ncloud_cluster_uuid`
+    - `cluster_access_secret`
   - On-Prem:
     - `argo_destination_name`
     - `kube_api_server`
     - `cluster_access_secret`
+- Secret Drawer:
+  - `repo_access_secret`
+  - `gitops_repo_access_secret`
+  - `ncloud_access_key_secret`
+  - `ncloud_secret_key_secret`
+  - env별 runtime secret
 - prod blue-green 옵션
   - `prod_blue_green_enabled`
   - `healthcheck_path`
