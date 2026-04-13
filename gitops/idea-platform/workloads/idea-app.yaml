@@ -1,8 +1,147 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: idea-frontend-assets
+  namespace: idea-system
+  labels:
+    app.kubernetes.io/instance: idea-platform
+data:
+  index.html: |
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>idea Time Demo</title>
+        <style>
+          :root {
+            color-scheme: light;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          }
+
+          * {
+            box-sizing: border-box;
+          }
+
+          body {
+            margin: 0;
+            min-height: 100vh;
+            background: #ffffff;
+            color: #111111;
+          }
+
+          main {
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            padding: 24px;
+          }
+
+          section {
+            width: min(560px, 100%);
+            padding: 32px;
+            border: 1px solid #e5e7eb;
+            border-radius: 18px;
+            box-shadow: 0 20px 48px rgba(15, 23, 42, 0.08);
+          }
+
+          h1 {
+            margin: 0 0 10px;
+            font-size: clamp(2rem, 5vw, 3rem);
+            line-height: 1;
+            letter-spacing: -0.04em;
+          }
+
+          p {
+            margin: 0 0 24px;
+            color: #4b5563;
+            line-height: 1.5;
+          }
+
+          .time {
+            font-size: clamp(2.4rem, 8vw, 4.4rem);
+            font-weight: 700;
+            letter-spacing: -0.05em;
+          }
+
+          .meta {
+            margin-top: 20px;
+            display: grid;
+            gap: 10px;
+            color: #374151;
+          }
+
+          .meta strong {
+            display: inline-block;
+            width: 110px;
+            color: #111111;
+          }
+
+          .error {
+            color: #b42318;
+          }
+        </style>
+      </head>
+      <body>
+        <main>
+          <section>
+            <h1>idea service</h1>
+            <p>The frontend reads the current server time from <code>/api/time</code>.</p>
+            <div id="time" class="time">loading...</div>
+            <div class="meta">
+              <div><strong>Status</strong><span id="status">loading</span></div>
+              <div><strong>Hostname</strong><span id="hostname">-</span></div>
+              <div><strong>Updated</strong><span id="updated">-</span></div>
+            </div>
+          </section>
+        </main>
+        <script>
+          const timeEl = document.getElementById("time");
+          const statusEl = document.getElementById("status");
+          const hostEl = document.getElementById("hostname");
+          const updatedEl = document.getElementById("updated");
+
+          async function refresh() {
+            try {
+              const response = await fetch("/api/time", {
+                headers: { Accept: "application/json" },
+                cache: "no-store"
+              });
+
+              if (!response.ok) {
+                throw new Error("backend returned " + response.status);
+              }
+
+              const payload = await response.json();
+              timeEl.textContent = payload.serverTime || "-";
+              timeEl.className = "time";
+              statusEl.textContent = payload.status || "ok";
+              statusEl.className = "";
+              hostEl.textContent = payload.hostname || "-";
+              updatedEl.textContent = new Date().toLocaleString();
+            } catch (error) {
+              timeEl.textContent = "unavailable";
+              timeEl.className = "time error";
+              statusEl.textContent = error.message;
+              statusEl.className = "error";
+              hostEl.textContent = "-";
+              updatedEl.textContent = new Date().toLocaleString();
+            }
+          }
+
+          refresh();
+          setInterval(refresh, 5000);
+        </script>
+      </body>
+    </html>
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: idea-frontend
   namespace: idea-system
+  labels:
+    app.kubernetes.io/instance: idea-platform
 spec:
   replicas: 1
   selector:
@@ -12,6 +151,7 @@ spec:
     metadata:
       labels:
         app: idea-frontend
+        app.kubernetes.io/instance: idea-platform
     spec:
       containers:
         - name: frontend
@@ -20,6 +160,10 @@ spec:
           ports:
             - containerPort: 80
               name: http
+          volumeMounts:
+            - name: frontend-assets
+              mountPath: /usr/share/nginx/html/index.html
+              subPath: index.html
           readinessProbe:
             httpGet:
               path: /
@@ -32,12 +176,18 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
+      volumes:
+        - name: frontend-assets
+          configMap:
+            name: idea-frontend-assets
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: idea-frontend
   namespace: idea-system
+  labels:
+    app.kubernetes.io/instance: idea-platform
 spec:
   selector:
     app: idea-frontend
@@ -47,11 +197,83 @@ spec:
       targetPort: http
   type: ClusterIP
 ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: idea-backend-source
+  namespace: idea-system
+  labels:
+    app.kubernetes.io/instance: idea-platform
+data:
+  server.js: |
+    const http = require("http");
+    const os = require("os");
+
+    const port = Number(process.env.PORT || "8080");
+    const appEnv = process.env.APP_ENV || "platform";
+
+    function send(response, statusCode, payload) {
+      response.writeHead(statusCode, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+      response.end(JSON.stringify(payload));
+    }
+
+    function payload(status) {
+      return {
+        status,
+        service: "idea-backend",
+        environment: appEnv,
+        serverTime: new Date().toISOString(),
+        hostname: os.hostname(),
+      };
+    }
+
+    const server = http.createServer((request, response) => {
+      if (request.method !== "GET") {
+        send(response, 405, { error: "method not allowed" });
+        return;
+      }
+
+      if (request.url === "/api" || request.url === "/api/") {
+        send(response, 200, payload("ok"));
+        return;
+      }
+
+      if (request.url === "/api/time") {
+        send(response, 200, payload("ok"));
+        return;
+      }
+
+      if (request.url === "/api/healthz") {
+        send(response, 200, payload("ok"));
+        return;
+      }
+
+      if (request.url === "/api/readyz") {
+        send(response, 200, payload("ready"));
+        return;
+      }
+
+      send(response, 404, {
+        error: "not found",
+        path: request.url,
+        hostname: os.hostname(),
+      });
+    });
+
+    server.listen(port, "0.0.0.0", () => {
+      console.log("idea-backend listening on " + port);
+    });
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: idea-backend
   namespace: idea-system
+  labels:
+    app.kubernetes.io/instance: idea-platform
 spec:
   replicas: 1
   selector:
@@ -61,19 +283,27 @@ spec:
     metadata:
       labels:
         app: idea-backend
+        app.kubernetes.io/instance: idea-platform
     spec:
       containers:
         - name: backend
-          image: mendhak/http-https-echo:31
+          image: node:22-alpine
           imagePullPolicy: IfNotPresent
+          command:
+            - node
+            - /app/server.js
+          env:
+            - name: PORT
+              value: "8080"
+            - name: APP_ENV
+              value: "platform"
           ports:
             - containerPort: 8080
               name: http
-          env:
-            - name: HTTP_PORT
-              value: "8080"
-            - name: HTTP_RESPONSE
-              value: '{"status":"ok","service":"idea-backend"}'
+          volumeMounts:
+            - name: backend-source
+              mountPath: /app/server.js
+              subPath: server.js
           readinessProbe:
             httpGet:
               path: /api/readyz
@@ -86,12 +316,18 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
+      volumes:
+        - name: backend-source
+          configMap:
+            name: idea-backend-source
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: idea-backend
   namespace: idea-system
+  labels:
+    app.kubernetes.io/instance: idea-platform
 spec:
   selector:
     app: idea-backend
