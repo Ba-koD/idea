@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 import generator
 from api_models import DeployRequest, EnvExchangeRequest, ProjectState, ProvisionRequest, normalize_project_state
 from env_import import apply_env_import, export_env_text, write_export_env_file
-from provisioning import provision_ncloud_target
+from provisioning import ProvisioningPartialFailure, provision_ncloud_target
 
 app = FastAPI(title="idea Control Plane API")
 OUTPUT_ROOT = Path("outputs")
@@ -114,6 +114,60 @@ def get_provision_task(task_id: str) -> dict | None:
         return json.loads(json.dumps(task)) if task else None
 
 
+def build_gitops_bundle(state: dict, selected_env: str) -> dict:
+    project = state["project"]
+    target = state["targets"][selected_env]
+    runtime_env = state["env"][selected_env]
+    cloudflare_env = state["cloudflare"]["environments"][selected_env]
+    hostname = state["routing"][f"{selected_env}_hostname"]
+
+    execution_logs = [
+        f"Loaded project state for {project['name']}.",
+        f"Selected environment: {selected_env.upper()}.",
+        f"App repository: {project['app_repo_url']} @ {project['git_ref']}.",
+        f"NKS target: {target['ncloud']['cluster_name']} / namespace {target['namespace']}.",
+        f"Cloudflare route: {hostname or '(base domain missing)'} via tunnel {state['cloudflare']['tunnel_name']}.",
+        "Argo CD will watch "
+        f"{state['argo']['gitops_repo_url']}#{state['argo']['gitops_repo_branch']} "
+        f"at {state['argo']['gitops_repo_path']}/{selected_env}.",
+        f"Runtime APP_ENV={runtime_env.get('APP_ENV', selected_env)} "
+        f"PUBLIC_API_BASE_URL={runtime_env.get('PUBLIC_API_BASE_URL', '/api')}.",
+    ]
+
+    output_path = generator.generate_all(state, selected_env)
+    zip_filename = f"{project['name']}_{selected_env}_manifests.zip"
+    zip_path = output_path / zip_filename
+
+    if zip_path.exists():
+        zip_path.unlink()
+
+    with zipfile.ZipFile(zip_path, "w") as zipf:
+        for root, _, files in os.walk(output_path):
+            for file in files:
+                if file == zip_filename or not file.endswith((".yaml", ".yml", ".json", ".txt")):
+                    continue
+                zipf.write(os.path.join(root, file), arcname=file)
+
+    execution_logs.append(
+        "Bundle generated with namespace, Argo CD application, runtime ConfigMap, and redacted project-state payload."
+    )
+    if any(not str(value).startswith("secret://") for value in state["secrets"][selected_env].values()):
+        execution_logs.append("Inline runtime secrets were materialized into a Kubernetes Secret manifest for Argo CD.")
+    elif state["secrets"][selected_env]:
+        execution_logs.append("Runtime secret refs were kept as refs only. No inline Kubernetes Secret manifest was generated.")
+    execution_logs.append(f"Argo CD access hint: {state['argo']['access_hint']}")
+
+    return {
+        "logs": execution_logs,
+        "download_url": f"/api/download/{project['name']}/{selected_env}",
+        "hostname": hostname,
+        "cloudflare": {
+            "subdomain": cloudflare_env.get("subdomain", ""),
+            "base_domain": cloudflare_env.get("base_domain", ""),
+        },
+    }
+
+
 @app.on_event("startup")
 async def startup_event():
     ensure_project_state_file()
@@ -196,59 +250,16 @@ async def deploy_project(req: DeployRequest):
     try:
         selected_env = req.selected_env
         state = save_project_state(req.project_state)
-        project = state["project"]
-        target = state["targets"][selected_env]
-        runtime_env = state["env"][selected_env]
-        cloudflare_env = state["cloudflare"]["environments"][selected_env]
-        hostname = state["routing"][f"{selected_env}_hostname"]
-
-        execution_logs = [
-            f"Loaded project state for {project['name']}.",
-            f"Selected environment: {selected_env.upper()}.",
-            f"App repository: {project['app_repo_url']} @ {project['git_ref']}.",
-            f"NKS target: {target['ncloud']['cluster_name']} / namespace {target['namespace']}.",
-            f"Cloudflare route: {hostname or '(base domain missing)'} via tunnel {state['cloudflare']['tunnel_name']}.",
-            "Argo CD will watch "
-            f"{state['argo']['gitops_repo_url']}#{state['argo']['gitops_repo_branch']} "
-            f"at {state['argo']['gitops_repo_path']}/{selected_env}.",
-            f"Runtime APP_ENV={runtime_env.get('APP_ENV', selected_env)} "
-            f"PUBLIC_API_BASE_URL={runtime_env.get('PUBLIC_API_BASE_URL', '/api')}.",
-        ]
-
-        output_path = generator.generate_all(state, selected_env)
-        zip_filename = f"{project['name']}_{selected_env}_manifests.zip"
-        zip_path = output_path / zip_filename
-
-        if zip_path.exists():
-            zip_path.unlink()
-
-        with zipfile.ZipFile(zip_path, "w") as zipf:
-            for root, _, files in os.walk(output_path):
-                for file in files:
-                    if file == zip_filename or not file.endswith((".yaml", ".yml", ".json", ".txt")):
-                        continue
-                    zipf.write(os.path.join(root, file), arcname=file)
-
-        execution_logs.append(
-            "Bundle generated with namespace, Argo CD application, runtime ConfigMap, and redacted project-state payload."
-        )
-        if any(not str(value).startswith("secret://") for value in state["secrets"][selected_env].values()):
-            execution_logs.append("Inline runtime secrets were materialized into a Kubernetes Secret manifest for Argo CD.")
-        elif state["secrets"][selected_env]:
-            execution_logs.append("Runtime secret refs were kept as refs only. No inline Kubernetes Secret manifest was generated.")
-        execution_logs.append(f"Argo CD access hint: {state['argo']['access_hint']}")
+        bundle = build_gitops_bundle(state, selected_env)
 
         return {
             "status": "success",
             "project_state": "reconciled",
             "message": f"{selected_env.upper()} 환경 GitOps 입력값 정리 완료",
-            "logs": execution_logs,
-            "download_url": f"/api/download/{project['name']}/{selected_env}",
-            "hostname": hostname,
-            "cloudflare": {
-                "subdomain": cloudflare_env.get("subdomain", ""),
-                "base_domain": cloudflare_env.get("base_domain", ""),
-            },
+            "logs": bundle["logs"],
+            "download_url": bundle["download_url"],
+            "hostname": bundle["hostname"],
+            "cloudflare": bundle["cloudflare"],
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -277,6 +288,8 @@ async def provision_target(req: ProvisionRequest):
         }
 
         if result["applied"]:
+            bundle = build_gitops_bundle(saved_state, selected_env)
+            result["logs"].extend(bundle["logs"])
             payload.update(
                 {
                     "cluster_uuid": result["outputs"]["cluster_uuid"],
@@ -285,6 +298,9 @@ async def provision_target(req: ProvisionRequest):
                     "argocd_cluster_secret_download_url": (
                         f"/api/download-provision/{saved_state['project']['name']}/{selected_env}/argocd-cluster-secret"
                     ),
+                    "gitops_bundle_download_url": bundle["download_url"],
+                    "logs": result["logs"],
+                    "message": f"{selected_env.upper()} Ncloud target provisioned and GitOps bundle generated.",
                 }
             )
         if result.get("warnings"):
@@ -293,6 +309,9 @@ async def provision_target(req: ProvisionRequest):
         return payload
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ProvisioningPartialFailure as exc:
+        save_project_state(exc.next_state)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception as exc:
@@ -334,6 +353,8 @@ async def start_provision_target(req: ProvisionRequest):
             }
 
             if result["applied"]:
+                bundle = build_gitops_bundle(saved_state, payload["selected_env"])
+                result["logs"].extend(bundle["logs"])
                 result_payload.update(
                     {
                         "cluster_uuid": result["outputs"]["cluster_uuid"],
@@ -342,6 +363,9 @@ async def start_provision_target(req: ProvisionRequest):
                         "argocd_cluster_secret_download_url": (
                             f"/api/download-provision/{saved_state['project']['name']}/{payload['selected_env']}/argocd-cluster-secret"
                         ),
+                        "gitops_bundle_download_url": bundle["download_url"],
+                        "logs": result["logs"],
+                        "message": f"{payload['selected_env'].upper()} Ncloud target provisioned and GitOps bundle generated.",
                     }
                 )
             if result.get("warnings"):
@@ -351,6 +375,21 @@ async def start_provision_target(req: ProvisionRequest):
                 task["task_id"],
                 status="completed",
                 result=result_payload,
+            )
+        except ProvisioningPartialFailure as exc:
+            saved_state = save_project_state(exc.next_state)
+            append_provision_log(task["task_id"], str(exc))
+            update_provision_task(
+                task["task_id"],
+                status="failed",
+                error=str(exc),
+                result={
+                    "project_state": saved_state,
+                    "runtime_dir": exc.runtime_dir,
+                    "logs": exc.logs,
+                    "warnings": exc.warnings,
+                    "partial_outputs": exc.partial_outputs,
+                },
             )
         except Exception as exc:
             append_provision_log(task["task_id"], f"Provisioning failed: {exc}")

@@ -11,6 +11,11 @@ SUPPORTED_NCLOUD_CLUSTER_VERSIONS: tuple[str, ...] = ("1.33.4", "1.34.3", "1.32.
 DEFAULT_NCLOUD_CLUSTER_VERSION = "1.33.4"
 DEFAULT_PLATFORM_TUNNEL_NAME = "idea-platform"
 DEFAULT_ARGOCD_SUBDOMAIN = "argo"
+DEFAULT_NCLOUD_NODE_SERVER_SPEC_BY_ENV: Dict[str, str] = {
+    "dev": "s2-g3a",
+    "stage": "s2-g3a",
+    "prod": "s4-g3a",
+}
 
 
 def build_hostname(subdomain: str, base_domain: str) -> str:
@@ -54,6 +59,16 @@ def normalize_argocd_access_hint(raw_hint: Any, state: Dict[str, Any]) -> str:
     return desired_hint
 
 
+def normalize_ncloud_node_product_code(raw_value: Any, env_name: str) -> str:
+    default_value = DEFAULT_NCLOUD_NODE_SERVER_SPEC_BY_ENV.get(env_name, "s2-g3a")
+    text = str(raw_value or "").strip()
+    if not text:
+        return default_value
+    if text.upper().startswith("SVR."):
+        return default_value
+    return text
+
+
 def default_targets() -> Dict[str, Dict[str, Any]]:
     return {
         "dev": {
@@ -76,10 +91,11 @@ def default_targets() -> Dict[str, Dict[str, Any]]:
                 "subnet_no": "subnet-dev",
                 "lb_subnet_no": "lb-subnet-dev",
                 "lb_public_subnet_no": "",
+                "node_pool_id": "",
                 "login_key_name": "idea-runtime-login",
                 "node_pool_name": "repo-example-dev-pool",
                 "node_count": 2,
-                "node_product_code": "SVR.VSVR.STAND.C002.M004.NET.SSD.B050.G002",
+                "node_product_code": DEFAULT_NCLOUD_NODE_SERVER_SPEC_BY_ENV["dev"],
                 "node_image_label": "ubuntu-22.04",
                 "block_storage_size_gb": 50,
                 "autoscale_enabled": True,
@@ -111,10 +127,11 @@ def default_targets() -> Dict[str, Dict[str, Any]]:
                 "subnet_no": "subnet-stage",
                 "lb_subnet_no": "lb-subnet-stage",
                 "lb_public_subnet_no": "",
+                "node_pool_id": "",
                 "login_key_name": "idea-runtime-login",
                 "node_pool_name": "repo-example-stage-pool",
                 "node_count": 2,
-                "node_product_code": "SVR.VSVR.STAND.C002.M004.NET.SSD.B050.G002",
+                "node_product_code": DEFAULT_NCLOUD_NODE_SERVER_SPEC_BY_ENV["stage"],
                 "node_image_label": "ubuntu-22.04",
                 "block_storage_size_gb": 50,
                 "autoscale_enabled": True,
@@ -146,10 +163,11 @@ def default_targets() -> Dict[str, Dict[str, Any]]:
                 "subnet_no": "subnet-prod",
                 "lb_subnet_no": "lb-subnet-prod",
                 "lb_public_subnet_no": "",
+                "node_pool_id": "",
                 "login_key_name": "idea-runtime-login",
                 "node_pool_name": "repo-example-prod-pool",
                 "node_count": 3,
-                "node_product_code": "SVR.VSVR.STAND.C004.M008.NET.SSD.B100.G002",
+                "node_product_code": DEFAULT_NCLOUD_NODE_SERVER_SPEC_BY_ENV["prod"],
                 "node_image_label": "ubuntu-22.04",
                 "block_storage_size_gb": 100,
                 "autoscale_enabled": True,
@@ -349,6 +367,10 @@ def normalize_project_state(raw_state: Any) -> Dict[str, Any]:
             state.setdefault("secrets", {}).setdefault(env_name, {})
             state["secrets"][env_name] = prune_legacy_example_secrets(state["secrets"][env_name], env_name)
         state.setdefault("targets", {}).setdefault(env_name, deepcopy(DEFAULT_PROJECT_STATE["targets"][env_name]))
+        state["targets"][env_name]["ncloud"]["node_product_code"] = normalize_ncloud_node_product_code(
+            state["targets"][env_name]["ncloud"].get("node_product_code"),
+            env_name,
+        )
         access.setdefault(f"{env_name}_allowed_source_ips", [])
 
     delivery.setdefault("healthcheck_path", f"{routing.get('backend_base_path', '/api').rstrip('/')}/healthz")

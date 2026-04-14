@@ -6,6 +6,11 @@ const ENVIRONMENTS = ['dev', 'stage', 'prod'];
 const STORAGE_KEY = 'idea-project-state-v3';
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '/api';
 const SUPPORTED_NCLOUD_CLUSTER_VERSIONS = ['1.33.4', '1.34.3', '1.32.8'];
+const DEFAULT_NCLOUD_NODE_SERVER_SPEC_BY_ENV = {
+  dev: 's2-g3a',
+  stage: 's2-g3a',
+  prod: 's4-g3a'
+};
 const DEFAULT_PLATFORM_TUNNEL_NAME = 'idea-platform';
 const ENVIRONMENT_META = {
   dev: { color: '#3b82f6', label: 'Development' },
@@ -137,6 +142,15 @@ function pruneLegacyExampleSecrets(secretMap, envName) {
   );
 }
 
+function normalizeNcloudNodeProductCode(rawValue, envName) {
+  const fallback = DEFAULT_NCLOUD_NODE_SERVER_SPEC_BY_ENV[envName] || 's2-g3a';
+  const value = String(rawValue || '').trim();
+  if (!value || value.toUpperCase().startsWith('SVR.')) {
+    return fallback;
+  }
+  return value;
+}
+
 function defaultProjectState() {
   return {
     project: {
@@ -196,10 +210,11 @@ function defaultProjectState() {
           subnet_no: 'subnet-dev',
           lb_subnet_no: 'lb-subnet-dev',
           lb_public_subnet_no: '',
+          node_pool_id: '',
           login_key_name: 'idea-runtime-login',
           node_pool_name: 'repo-example-dev-pool',
           node_count: 2,
-          node_product_code: 'SVR.VSVR.STAND.C002.M004.NET.SSD.B050.G002',
+          node_product_code: DEFAULT_NCLOUD_NODE_SERVER_SPEC_BY_ENV.dev,
           node_image_label: 'ubuntu-22.04',
           block_storage_size_gb: 50,
           autoscale_enabled: true,
@@ -231,10 +246,11 @@ function defaultProjectState() {
           subnet_no: 'subnet-stage',
           lb_subnet_no: 'lb-subnet-stage',
           lb_public_subnet_no: '',
+          node_pool_id: '',
           login_key_name: 'idea-runtime-login',
           node_pool_name: 'repo-example-stage-pool',
           node_count: 2,
-          node_product_code: 'SVR.VSVR.STAND.C002.M004.NET.SSD.B050.G002',
+          node_product_code: DEFAULT_NCLOUD_NODE_SERVER_SPEC_BY_ENV.stage,
           node_image_label: 'ubuntu-22.04',
           block_storage_size_gb: 50,
           autoscale_enabled: true,
@@ -266,10 +282,11 @@ function defaultProjectState() {
           subnet_no: 'subnet-prod',
           lb_subnet_no: 'lb-subnet-prod',
           lb_public_subnet_no: '',
+          node_pool_id: '',
           login_key_name: 'idea-runtime-login',
           node_pool_name: 'repo-example-prod-pool',
           node_count: 3,
-          node_product_code: 'SVR.VSVR.STAND.C004.M008.NET.SSD.B100.G002',
+          node_product_code: DEFAULT_NCLOUD_NODE_SERVER_SPEC_BY_ENV.prod,
           node_image_label: 'ubuntu-22.04',
           block_storage_size_gb: 100,
           autoscale_enabled: true,
@@ -377,6 +394,10 @@ function normalizeProjectState(rawState) {
       );
     }
     merged.targets[envName] = deepMerge(defaultProjectState().targets[envName], merged.targets[envName] || {});
+    merged.targets[envName].ncloud.node_product_code = normalizeNcloudNodeProductCode(
+      merged.targets[envName].ncloud.node_product_code,
+      envName
+    );
     merged.access[`${envName}_allowed_source_ips`] = merged.access[`${envName}_allowed_source_ips`] || [];
   });
 
@@ -414,6 +435,8 @@ function App() {
   const [isImportingEnv, setIsImportingEnv] = useState(false);
   const [isExportingEnv, setIsExportingEnv] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
+  const [isToastExpanded, setIsToastExpanded] = useState(false);
+  const [isToastDismissed, setIsToastDismissed] = useState(false);
   const [envImportSummaries, setEnvImportSummaries] = useState({
     dev: null,
     stage: null,
@@ -440,6 +463,13 @@ function App() {
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
+
+  useEffect(() => {
+    if (statusMessage) {
+      setIsToastDismissed(false);
+      setIsToastExpanded(false);
+    }
+  }, [statusMessage]);
 
   useEffect(() => {
     let cancelled = false;
@@ -580,42 +610,6 @@ function App() {
     return payload;
   }
 
-  async function handleDeployAll() {
-    setIsDeploying(true);
-    setStatusMessage('');
-    setBundleDownloadUrls({
-      dev: '',
-      stage: '',
-      prod: ''
-    });
-
-    try {
-      const saved = await persistProjectState();
-      const nextDownloadUrls = {
-        dev: '',
-        stage: '',
-        prod: ''
-      };
-      const combinedLogs = ['Starting bulk bundle generation for DEV, STAGE, PROD.'];
-
-      for (const envName of ENVIRONMENTS) {
-        combinedLogs.push(`Generating ${envName.toUpperCase()} bundle...`);
-        const payload = await deployEnvironment(saved, envName);
-        combinedLogs.push(...(payload.logs || [`${envName.toUpperCase()} bundle generated.`]));
-        nextDownloadUrls[envName] = payload.download_url || '';
-      }
-
-      setBundleDownloadUrls(nextDownloadUrls);
-      setLogs(combinedLogs);
-      setStatusMessage('DEV / STAGE / PROD bundle generation completed.');
-    } catch (error) {
-      setLogs((currentLogs) => [...currentLogs, `Bulk generate failed: ${error.message}`]);
-      setStatusMessage(`Bulk generate failed: ${error.message}`);
-    } finally {
-      setIsDeploying(false);
-    }
-  }
-
   async function handleProvisionTarget() {
     setIsProvisioningTarget(true);
     setStatusMessage('');
@@ -647,7 +641,7 @@ function App() {
         });
         const statusPayload = await statusResponse.json();
         if (!statusResponse.ok) {
-          throw new Error(statusPayload.detail || `provision status failed with ${statusResponse.status}`);
+          throw new Error(statusPayload.detail?.message || statusPayload.detail || `provision status failed with ${statusResponse.status}`);
         }
 
         setLogs(statusPayload.logs || []);
@@ -658,6 +652,10 @@ function App() {
           setProjectState(nextState);
           setStateSource('backend');
           window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
+          setBundleDownloadUrls((current) => ({
+            ...current,
+            [activeEnv]: result.gitops_bundle_download_url || current[activeEnv] || ''
+          }));
           setProvisionArtifactUrls((current) => ({
             ...current,
             [activeEnv]: {
@@ -670,6 +668,13 @@ function App() {
         }
 
         if (statusPayload.status === 'failed') {
+          const failedResult = statusPayload.result || {};
+          if (failedResult.project_state) {
+            const nextState = normalizeProjectState(failedResult.project_state);
+            setProjectState(nextState);
+            setStateSource('backend');
+            window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
+          }
           throw new Error(statusPayload.error || 'provisioning task failed');
         }
       }
@@ -897,7 +902,7 @@ function App() {
         <div className="header-right-status">
           <span className="live-status">
             <span className="status-dot green"></span>
-            {statusMessage || `State source: ${stateSource}`}
+            {`State source: ${stateSource}`}
           </span>
         </div>
       </header>
@@ -1207,7 +1212,7 @@ function App() {
                       next.targets[activeEnv].ncloud.login_key_name = event.target.value;
                     })
                   }
-                  placeholder="must already exist in Ncloud"
+                  placeholder="created automatically if missing"
                 />
               </div>
             </div>
@@ -1216,7 +1221,9 @@ function App() {
               <span>Ncloud Provisioning Notes</span>
               <pre>{[
                 `Supported Kubernetes versions: ${SUPPORTED_NCLOUD_CLUSTER_VERSIONS.join(', ')}`,
-                'login_key_name must match an existing Ncloud login key before provisioning runs.',
+                `Default node server spec: ${DEFAULT_NCLOUD_NODE_SERVER_SPEC_BY_ENV[activeEnv]}`,
+                'Legacy SVR.* node product codes are normalized to valid NKS serverSpecCode values automatically.',
+                'login_key_name is created automatically if it does not exist yet.',
                 'Provisioning also tries to register the new cluster into the platform Argo CD automatically.',
                 'If Cloudflare control-plane values are present, provisioning also tries to reconcile argo.rnen.kr automatically.',
                 'If cluster_uuid / vpc_no / subnet_no stay as placeholders, Terraform creates new target resources.',
@@ -1394,14 +1401,6 @@ function App() {
             </button>
 
             <button
-              className="secondary-btn"
-              onClick={handleDeployAll}
-              disabled={isSaving || isDeploying || isProvisioningTarget || isImportingEnv || isExportingEnv}
-            >
-              {isDeploying ? 'GENERATING ALL...' : 'GENERATE ALL BUNDLES'}
-            </button>
-
-            <button
               className="main-deploy-btn"
               style={{ backgroundColor: currentMeta.color }}
               onClick={handleDeploy}
@@ -1430,18 +1429,6 @@ function App() {
             <a href={bundleDownloadUrls[activeEnv]} download className="download-btn-link">
               DOWNLOAD {activeEnv.toUpperCase()} GITOPS BUNDLE
             </a>
-          )}
-
-          {(bundleDownloadUrls.dev || bundleDownloadUrls.stage || bundleDownloadUrls.prod) && (
-            <div className="action-row">
-              {ENVIRONMENTS.map((envName) =>
-                bundleDownloadUrls[envName] ? (
-                  <a key={envName} href={bundleDownloadUrls[envName]} download className="download-btn-link env-download-link">
-                    DOWNLOAD {envName.toUpperCase()} BUNDLE
-                  </a>
-                ) : null
-              )}
-            </div>
           )}
           </div>
         </aside>
@@ -1524,6 +1511,27 @@ function App() {
           </div>
         </main>
       </div>
+
+      {statusMessage && !isToastDismissed && (
+        <div className={`floating-toast ${isToastExpanded ? 'expanded' : ''}`} role="status" aria-live="polite">
+          <button
+            type="button"
+            className="toast-text"
+            onClick={() => setIsToastExpanded((current) => !current)}
+            title={statusMessage}
+          >
+            {statusMessage}
+          </button>
+          <button
+            type="button"
+            className="toast-close"
+            onClick={() => setIsToastDismissed(true)}
+            aria-label="Dismiss status message"
+          >
+            ×
+          </button>
+        </div>
+      )}
     </div>
   );
 }

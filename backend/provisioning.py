@@ -16,6 +16,11 @@ from urllib.request import Request, urlopen
 
 SUPPORTED_NCLOUD_CLUSTER_VERSIONS: tuple[str, ...] = ("1.33.4", "1.34.3", "1.32.8")
 DEFAULT_NCLOUD_CLUSTER_VERSION = "1.33.4"
+DEFAULT_NCLOUD_NODE_SERVER_SPEC_BY_ENV: dict[str, str] = {
+    "dev": "s2-g3a",
+    "stage": "s2-g3a",
+    "prod": "s4-g3a",
+}
 DEFAULT_PLATFORM_CADDY_SERVICE_URL = os.getenv(
     "IDEA_PLATFORM_CADDY_SERVICE_URL",
     "http://platform-caddy.edge-system.svc.cluster.local:80",
@@ -56,6 +61,7 @@ TERRAFORM_VARIABLES_TF = dedent(
     variable "existing_node_subnet_no" { type = string }
     variable "existing_lb_private_subnet_no" { type = string }
     variable "existing_lb_public_subnet_no" { type = string }
+    variable "existing_node_pool_id" { type = string }
 
     variable "vpc_name" { type = string }
     variable "vpc_cidr" { type = string }
@@ -92,7 +98,9 @@ TERRAFORM_MAIN_TF = dedent(
       use_existing_node_subnet       = !local.use_existing_cluster && trimspace(var.existing_node_subnet_no) != "" && can(regex("^[0-9]+$", var.existing_node_subnet_no))
       use_existing_lb_private_subnet = !local.use_existing_cluster && trimspace(var.existing_lb_private_subnet_no) != "" && can(regex("^[0-9]+$", var.existing_lb_private_subnet_no))
       use_existing_lb_public_subnet  = !local.use_existing_cluster && trimspace(var.existing_lb_public_subnet_no) != "" && can(regex("^[0-9]+$", var.existing_lb_public_subnet_no))
+      use_existing_node_pool         = trimspace(var.existing_node_pool_id) != "" && can(regex("^[0-9]+$", var.existing_node_pool_id))
       has_existing_login_key         = try(length(data.ncloud_login_key.existing.login_key_list), 0) > 0
+      create_login_key               = !local.use_existing_cluster && !local.has_existing_login_key
     }
 
     data "ncloud_login_key" "existing" {
@@ -102,11 +110,16 @@ TERRAFORM_MAIN_TF = dedent(
       }
     }
 
+    resource "ncloud_login_key" "managed" {
+      count    = local.create_login_key ? 1 : 0
+      key_name = var.login_key_name
+    }
+
     resource "terraform_data" "preflight" {
       lifecycle {
         precondition {
-          condition     = local.use_existing_cluster || local.has_existing_login_key
-          error_message = "login_key_name must point to an existing Ncloud login key before cluster provisioning can run."
+          condition     = trimspace(var.login_key_name) != ""
+          error_message = "login_key_name must be non-empty before cluster provisioning can run."
         }
       }
     }
@@ -179,6 +192,7 @@ TERRAFORM_MAIN_TF = dedent(
       node_subnet_no       = local.use_existing_cluster ? try(data.ncloud_nks_cluster.existing[0].subnet_no_list[0], "") : (local.use_existing_node_subnet ? data.ncloud_subnet.existing_node[0].id : ncloud_subnet.node[0].id)
       lb_private_subnet_no = local.use_existing_cluster ? data.ncloud_nks_cluster.existing[0].lb_private_subnet_no : (local.use_existing_lb_private_subnet ? data.ncloud_subnet.existing_lb_private[0].id : ncloud_subnet.lb_private[0].id)
       lb_public_subnet_no  = local.use_existing_cluster ? try(data.ncloud_nks_cluster.existing[0].lb_public_subnet_no, "") : (local.use_existing_lb_public_subnet ? data.ncloud_subnet.existing_lb_public[0].id : ncloud_subnet.lb_public[0].id)
+      effective_login_key_name = local.use_existing_cluster ? "" : (local.create_login_key ? ncloud_login_key.managed[0].key_name : var.login_key_name)
     }
 
     data "ncloud_nks_versions" "cluster_version" {
@@ -212,7 +226,7 @@ TERRAFORM_MAIN_TF = dedent(
       hypervisor_code       = var.hypervisor_code
       cluster_type          = var.cluster_type_code
       k8s_version           = data.ncloud_nks_versions.cluster_version.versions[0].value
-      login_key_name        = var.login_key_name
+      login_key_name        = local.effective_login_key_name
       zone                  = var.zone
       vpc_no                = local.vpc_no
       subnet_no_list        = [local.node_subnet_no]
@@ -222,7 +236,7 @@ TERRAFORM_MAIN_TF = dedent(
       public_network        = false
       return_protection     = false
 
-      depends_on = [terraform_data.preflight]
+      depends_on = [terraform_data.preflight, ncloud_login_key.managed]
     }
 
     locals {
@@ -231,7 +245,7 @@ TERRAFORM_MAIN_TF = dedent(
     }
 
     resource "ncloud_nks_node_pool" "node_pool" {
-      count            = local.use_existing_cluster ? 0 : 1
+      count            = local.use_existing_node_pool ? 0 : 1
       cluster_uuid     = local.cluster_uuid
       node_pool_name   = var.node_pool_name
       node_count       = var.node_count
@@ -281,7 +295,12 @@ TERRAFORM_OUTPUTS_TF = dedent(
     }
 
     output "node_pool_id" {
-      value = try(ncloud_nks_node_pool.node_pool[0].id, "")
+      value = local.use_existing_node_pool ? var.existing_node_pool_id : try(ncloud_nks_node_pool.node_pool[0].id, "")
+    }
+
+    output "managed_login_private_key" {
+      sensitive = true
+      value = try(ncloud_login_key.managed[0].private_key, "")
     }
 
     output "kubeconfig" {
@@ -315,6 +334,46 @@ def looks_like_resource_id(value: Any) -> bool:
 def looks_like_placeholder(value: Any) -> bool:
     text = str(value or "").strip().lower()
     return not text or text.startswith("replace-me") or text in {"changeme", "change-me", "placeholder", "todo"}
+
+
+def normalize_resource_name(value: Any, fallback: str, max_length: int) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        raw = fallback.strip().lower()
+    normalized = re.sub(r"[^a-z0-9-]+", "-", raw)
+    normalized = re.sub(r"-{2,}", "-", normalized).strip("-")
+    if len(normalized) > max_length:
+        normalized = normalized[:max_length].rstrip("-")
+    return normalized or fallback[:max_length].strip("-")
+
+
+def normalize_node_server_spec_code(value: Any, selected_env: str) -> str:
+    default = DEFAULT_NCLOUD_NODE_SERVER_SPEC_BY_ENV.get(selected_env, "s2-g3a")
+    text = str(value or "").strip()
+    if looks_like_placeholder(text):
+        return default
+    if text.upper().startswith("SVR."):
+        return default
+    return text
+
+
+class ProvisioningPartialFailure(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        next_state: dict[str, Any],
+        runtime_dir: str,
+        logs: list[str],
+        partial_outputs: dict[str, Any] | None = None,
+        warnings: list[str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.next_state = next_state
+        self.runtime_dir = runtime_dir
+        self.logs = logs
+        self.partial_outputs = partial_outputs or {}
+        self.warnings = warnings or []
 
 
 def run_command(
@@ -870,10 +929,119 @@ def extract_terraform_output(raw_output: str) -> dict[str, Any]:
     return {key: value.get("value") for key, value in payload.items()}
 
 
+def read_terraform_state(runtime_dir: Path) -> dict[str, Any]:
+    state_path = runtime_dir / "terraform.tfstate"
+    if not state_path.exists():
+        return {}
+    try:
+        return json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def first_resource_attributes(state_payload: dict[str, Any], resource_type: str, resource_name: str) -> dict[str, Any]:
+    for resource in state_payload.get("resources", []):
+        if resource.get("type") != resource_type or resource.get("name") != resource_name:
+            continue
+        for instance in resource.get("instances", []):
+            attributes = instance.get("attributes") or {}
+            if attributes:
+                return attributes
+    return {}
+
+
+def extract_partial_runtime_outputs(runtime_dir: Path) -> dict[str, Any]:
+    state_payload = read_terraform_state(runtime_dir)
+    cluster_attrs = first_resource_attributes(state_payload, "ncloud_nks_cluster", "cluster")
+    vpc_attrs = first_resource_attributes(state_payload, "ncloud_vpc", "managed")
+    node_attrs = first_resource_attributes(state_payload, "ncloud_subnet", "node")
+    lb_private_attrs = first_resource_attributes(state_payload, "ncloud_subnet", "lb_private")
+    lb_public_attrs = first_resource_attributes(state_payload, "ncloud_subnet", "lb_public")
+    login_key_attrs = first_resource_attributes(state_payload, "ncloud_login_key", "managed")
+    kubeconfig_attrs = first_resource_attributes(state_payload, "ncloud_nks_kube_config", "cluster")
+
+    partial_outputs: dict[str, Any] = {}
+    if cluster_attrs.get("uuid"):
+        partial_outputs["cluster_uuid"] = cluster_attrs.get("uuid")
+        partial_outputs["cluster_endpoint"] = cluster_attrs.get("endpoint", "")
+        partial_outputs["vpc_no"] = cluster_attrs.get("vpc_no") or vpc_attrs.get("id") or vpc_attrs.get("vpc_no") or ""
+        partial_outputs["node_subnet_no"] = (
+            (cluster_attrs.get("subnet_no_list") or [""])[0]
+            or node_attrs.get("id")
+            or node_attrs.get("subnet_no")
+            or ""
+        )
+        partial_outputs["lb_private_subnet_no"] = (
+            cluster_attrs.get("lb_private_subnet_no") or lb_private_attrs.get("id") or lb_private_attrs.get("subnet_no") or ""
+        )
+        partial_outputs["lb_public_subnet_no"] = (
+            cluster_attrs.get("lb_public_subnet_no") or lb_public_attrs.get("id") or lb_public_attrs.get("subnet_no") or ""
+        )
+
+    if kubeconfig_attrs.get("host"):
+        partial_outputs["kubeconfig"] = {
+            "host": kubeconfig_attrs.get("host", ""),
+            "client_certificate": kubeconfig_attrs.get("client_certificate", ""),
+            "client_key": kubeconfig_attrs.get("client_key", ""),
+            "cluster_ca_certificate": kubeconfig_attrs.get("cluster_ca_certificate", ""),
+        }
+
+    if login_key_attrs.get("private_key"):
+        partial_outputs["managed_login_private_key"] = login_key_attrs.get("private_key", "")
+
+    return partial_outputs
+
+
+def write_runtime_artifacts_from_outputs(
+    runtime_dir: Path,
+    cluster_name: str,
+    login_key_name: str,
+    selected_env: str,
+    outputs: dict[str, Any],
+) -> None:
+    kubeconfig = outputs.get("kubeconfig")
+    if isinstance(kubeconfig, dict) and kubeconfig.get("host"):
+        (runtime_dir / "kubeconfig.yaml").write_text(
+            render_kubeconfig(cluster_name, kubeconfig),
+            encoding="utf-8",
+        )
+        cluster_endpoint = str(outputs.get("cluster_endpoint", "") or "").strip()
+        if cluster_endpoint:
+            (runtime_dir / "argocd-cluster-secret.yaml").write_text(
+                render_argocd_cluster_secret(cluster_name, cluster_endpoint, kubeconfig, selected_env),
+                encoding="utf-8",
+            )
+
+    managed_login_private_key = str(outputs.get("managed_login_private_key", "") or "").strip()
+    if managed_login_private_key:
+        managed_login_key_path = runtime_dir / f"{login_key_name}.pem"
+        managed_login_key_path.write_text(managed_login_private_key.rstrip() + "\n", encoding="utf-8")
+        managed_login_key_path.chmod(0o600)
+
+
+def apply_partial_outputs_to_state(state: dict[str, Any], selected_env: str, partial_outputs: dict[str, Any]) -> None:
+    ncloud = state["targets"][selected_env]["ncloud"]
+    if partial_outputs.get("cluster_uuid"):
+        ncloud["cluster_uuid"] = partial_outputs.get("cluster_uuid", "")
+    if partial_outputs.get("vpc_no"):
+        ncloud["vpc_no"] = partial_outputs.get("vpc_no", "")
+    if partial_outputs.get("node_subnet_no"):
+        ncloud["subnet_no"] = partial_outputs.get("node_subnet_no", "")
+    if partial_outputs.get("lb_private_subnet_no"):
+        ncloud["lb_subnet_no"] = partial_outputs.get("lb_private_subnet_no", "")
+    if partial_outputs.get("lb_public_subnet_no"):
+        ncloud["lb_public_subnet_no"] = partial_outputs.get("lb_public_subnet_no", "")
+
+
 def build_runtime_tfvars(project_state: dict[str, Any], selected_env: str) -> dict[str, Any]:
     project = project_state["project"]
     target = project_state["targets"][selected_env]
     ncloud = target["ncloud"]
+    cluster_name = ncloud.get("cluster_name") or f"{project['name']}-{selected_env}"
+    node_server_spec_code = normalize_node_server_spec_code(
+        ncloud.get("node_server_spec_code") or ncloud.get("node_product_code"),
+        selected_env,
+    )
 
     return {
         "site": project_state.get("provisioning", {}).get("site", "public"),
@@ -881,7 +1049,7 @@ def build_runtime_tfvars(project_state: dict[str, Any], selected_env: str) -> di
         "zone": ncloud.get("zone_code", "KR-2"),
         "project_name": project["name"],
         "environment_name": selected_env,
-        "cluster_name": ncloud.get("cluster_name") or f"{project['name']}-{selected_env}",
+        "cluster_name": cluster_name,
         "existing_cluster_uuid": ncloud.get("cluster_uuid") if looks_like_uuid(ncloud.get("cluster_uuid")) else "",
         "cluster_version": ncloud.get("cluster_version", DEFAULT_NCLOUD_CLUSTER_VERSION),
         "cluster_type_code": ncloud.get("cluster_type_code", "SVR.VNKS.STAND.C004.M016.G003"),
@@ -891,17 +1059,18 @@ def build_runtime_tfvars(project_state: dict[str, Any], selected_env: str) -> di
         "existing_node_subnet_no": ncloud.get("subnet_no") if looks_like_resource_id(ncloud.get("subnet_no")) else "",
         "existing_lb_private_subnet_no": ncloud.get("lb_subnet_no") if looks_like_resource_id(ncloud.get("lb_subnet_no")) else "",
         "existing_lb_public_subnet_no": ncloud.get("lb_public_subnet_no") if looks_like_resource_id(ncloud.get("lb_public_subnet_no")) else "",
-        "vpc_name": f"{project['name']}-{selected_env}-vpc",
+        "existing_node_pool_id": ncloud.get("node_pool_id") if looks_like_resource_id(ncloud.get("node_pool_id")) else "",
+        "vpc_name": normalize_resource_name(ncloud.get("vpc_name"), f"{cluster_name}-vpc", 30),
         "vpc_cidr": ncloud.get("vpc_cidr", "10.10.0.0/16"),
-        "node_subnet_name": f"{project['name']}-{selected_env}-node",
+        "node_subnet_name": normalize_resource_name(ncloud.get("node_subnet_name"), f"{cluster_name}-node", 30),
         "node_subnet_cidr": ncloud.get("node_subnet_cidr", "10.10.1.0/24"),
-        "lb_private_subnet_name": f"{project['name']}-{selected_env}-lb-private",
+        "lb_private_subnet_name": normalize_resource_name(ncloud.get("lb_private_subnet_name"), f"{cluster_name}-lbpri", 30),
         "lb_private_subnet_cidr": ncloud.get("lb_private_subnet_cidr", "10.10.10.0/24"),
-        "lb_public_subnet_name": f"{project['name']}-{selected_env}-lb-public",
+        "lb_public_subnet_name": normalize_resource_name(ncloud.get("lb_public_subnet_name"), f"{cluster_name}-lbpub", 30),
         "lb_public_subnet_cidr": ncloud.get("lb_public_subnet_cidr", "10.10.11.0/24"),
-        "node_pool_name": ncloud.get("node_pool_name", f"{project['name']}-{selected_env}-pool"),
+        "node_pool_name": normalize_resource_name(ncloud.get("node_pool_name"), f"{cluster_name}-pool", 20),
         "node_count": int(ncloud.get("node_count", 2)),
-        "node_server_spec_code": ncloud.get("node_server_spec_code") or ncloud.get("node_product_code"),
+        "node_server_spec_code": node_server_spec_code,
         "node_image_label": ncloud.get("node_image_label", "ubuntu-22.04"),
         "node_storage_size_gb": int(ncloud.get("block_storage_size_gb", 50)),
         "autoscale_enabled": bool(ncloud.get("autoscale_enabled", True)),
@@ -931,7 +1100,7 @@ def validate_ncloud_preflight(
         )
 
     if looks_like_placeholder(tfvars["login_key_name"]):
-        errors.append("login_key_name must be set to an existing Ncloud login key name.")
+        errors.append("login_key_name must be non-empty before provisioning can run.")
 
     if looks_like_placeholder(access_key):
         errors.append(
@@ -1001,6 +1170,7 @@ def provision_ncloud_target(
     validate_ncloud_preflight(tfvars, access_key_ref, access_key, secret_key_ref, secret_key)
     runtime_dir = ensure_runtime_dir(output_root, project["name"], selected_env)
     write_runtime_terraform_files(runtime_dir, tfvars)
+    state["targets"][selected_env]["ncloud"]["node_product_code"] = tfvars["node_server_spec_code"]
 
     terraform_bin = state.get("provisioning", {}).get("terraform_executable", "terraform")
     command_env = {
@@ -1021,6 +1191,7 @@ def provision_ncloud_target(
     emit(f"Prepared Terraform runtime in {runtime_dir}.")
     emit(f"Ncloud target cluster_name={tfvars['cluster_name']} zone={tfvars['zone']} region={tfvars['region']}.")
     emit(f"Existing cluster_uuid={tfvars['existing_cluster_uuid'] or '(create new)'} vpc_no={tfvars['existing_vpc_no'] or '(create new)'}.")
+    emit(f"Ncloud node server spec={tfvars['node_server_spec_code']} node_count={tfvars['node_count']}.")
     emit("Running terraform init.")
 
     init_result = run_command([terraform_bin, "init", "-backend=false"], runtime_dir, command_env, log_callback=log_callback)
@@ -1045,6 +1216,30 @@ def provision_ncloud_target(
     emit("Running terraform apply.")
     apply_result = run_command([terraform_bin, "apply", "-auto-approve"], runtime_dir, command_env, log_callback=log_callback)
     if apply_result.returncode != 0:
+        partial_outputs = extract_partial_runtime_outputs(runtime_dir)
+        if partial_outputs.get("cluster_uuid"):
+            apply_partial_outputs_to_state(state, selected_env, partial_outputs)
+            write_runtime_artifacts_from_outputs(
+                runtime_dir,
+                tfvars["cluster_name"],
+                tfvars["login_key_name"],
+                selected_env,
+                partial_outputs,
+            )
+            emit(
+                "Terraform apply failed after partial resource creation. "
+                f"Recovered cluster_uuid={partial_outputs.get('cluster_uuid')} for retry."
+            )
+            raise ProvisioningPartialFailure(
+                "terraform apply failed after partial resource creation. "
+                f"Recovered cluster_uuid={partial_outputs.get('cluster_uuid')} and saved it to project state. "
+                "Fix the node server spec and retry provisioning.",
+                next_state=state,
+                runtime_dir=str(runtime_dir),
+                logs=logs,
+                partial_outputs=partial_outputs,
+                warnings=["Partial Ncloud resources were created and saved to project state for retry."],
+            )
         raise RuntimeError(f"terraform apply failed:\n{apply_result.stderr.strip() or apply_result.stdout.strip()}")
     emit("terraform apply completed.")
 
@@ -1055,14 +1250,17 @@ def provision_ncloud_target(
 
     outputs = extract_terraform_output(output_result.stdout)
     kubeconfig = outputs["kubeconfig"]
-    kubeconfig_path = runtime_dir / "kubeconfig.yaml"
-    kubeconfig_path.write_text(render_kubeconfig(tfvars["cluster_name"], kubeconfig), encoding="utf-8")
-
-    argocd_cluster_secret_path = runtime_dir / "argocd-cluster-secret.yaml"
-    argocd_cluster_secret_path.write_text(
-        render_argocd_cluster_secret(tfvars["cluster_name"], outputs["cluster_endpoint"], kubeconfig, selected_env),
-        encoding="utf-8",
+    write_runtime_artifacts_from_outputs(
+        runtime_dir,
+        tfvars["cluster_name"],
+        tfvars["login_key_name"],
+        selected_env,
+        outputs,
     )
+    kubeconfig_path = runtime_dir / "kubeconfig.yaml"
+    argocd_cluster_secret_path = runtime_dir / "argocd-cluster-secret.yaml"
+    managed_login_private_key = str(outputs.get("managed_login_private_key", "") or "").strip()
+    managed_login_key_path = runtime_dir / f"{tfvars['login_key_name']}.pem"
 
     integration_logs: list[str] = []
     integration_warnings: list[str] = []
@@ -1098,6 +1296,7 @@ def provision_ncloud_target(
     next_ncloud["subnet_no"] = outputs["node_subnet_no"]
     next_ncloud["lb_subnet_no"] = outputs["lb_private_subnet_no"]
     next_ncloud["lb_public_subnet_no"] = outputs["lb_public_subnet_no"]
+    next_ncloud["node_pool_id"] = outputs["node_pool_id"]
     next_ncloud["login_key_name"] = tfvars["login_key_name"]
     state["argo"]["destination_name"] = ""
     state["argo"]["destination_server"] = outputs["cluster_endpoint"]
@@ -1107,6 +1306,7 @@ def provision_ncloud_target(
         "runtime_dir": str(runtime_dir),
         "kubeconfig_path": str(kubeconfig_path),
         "argocd_cluster_secret_path": str(argocd_cluster_secret_path),
+        "managed_login_key_path": str(managed_login_key_path) if managed_login_private_key else "",
         "cluster_uuid": outputs["cluster_uuid"],
         "cluster_endpoint": outputs["cluster_endpoint"],
         "integration_logs": integration_logs,
@@ -1114,6 +1314,8 @@ def provision_ncloud_target(
     }
 
     emit(f"Wrote kubeconfig to {kubeconfig_path}.")
+    if managed_login_private_key:
+        emit(f"Wrote generated Ncloud login key to {managed_login_key_path}.")
     emit(f"Wrote Argo CD cluster secret manifest to {argocd_cluster_secret_path}.")
     for message in integration_logs:
         emit(message)
@@ -1125,6 +1327,7 @@ def provision_ncloud_target(
         "runtime_dir": str(runtime_dir),
         "kubeconfig_path": str(kubeconfig_path),
         "argocd_cluster_secret_path": str(argocd_cluster_secret_path),
+        "managed_login_key_path": str(managed_login_key_path) if managed_login_private_key else "",
         "logs": logs,
         "outputs": outputs,
         "warnings": integration_warnings,
