@@ -23,11 +23,13 @@ data:
 {% for line in runtime_env_block.split('\n') %}
     {{ line }}
 {% endfor %}
-  runtime.secrets: |
-{% for line in runtime_secrets_block.split('\n') %}
+{% if runtime_secret_refs_block %}
+  runtime.secretRefs: |
+{% for line in runtime_secret_refs_block.split('\n') %}
     {{ line }}
 {% endfor %}
+{% endif %}
   project-state.json: |
-{% for line in project_state_json.split('\n') %}
+{% for line in runtime_project_state_json.split('\n') %}
     {{ line }}
 {% endfor %}

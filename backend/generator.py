@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
+from env_import import redact_project_state, split_runtime_secrets
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 env_loader = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)))
@@ -22,6 +23,7 @@ def generate_all(project_state: dict, selected_env: str) -> Path:
     target = project_state["targets"][selected_env]
     cloudflare_env = project_state["cloudflare"]["environments"][selected_env]
     hostname = project_state["routing"][f"{selected_env}_hostname"]
+    runtime_inline_secrets, runtime_secret_refs = split_runtime_secrets(project_state["secrets"][selected_env])
     output_dir = Path("outputs") / project["name"] / selected_env
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -37,8 +39,10 @@ def generate_all(project_state: dict, selected_env: str) -> Path:
         "selected_env": selected_env,
         "hostname": hostname,
         "runtime_env_block": env_block(project_state["env"][selected_env]),
-        "runtime_secrets_block": env_block(project_state["secrets"][selected_env]),
+        "runtime_inline_secrets": runtime_inline_secrets,
+        "runtime_secret_refs_block": env_block(runtime_secret_refs),
         "project_state_json": json.dumps(project_state, indent=2, ensure_ascii=True),
+        "runtime_project_state_json": json.dumps(redact_project_state(project_state), indent=2, ensure_ascii=True),
     }
 
     rendered_files = {
@@ -49,6 +53,9 @@ def generate_all(project_state: dict, selected_env: str) -> Path:
         "runtime-project-input.json": context["project_state_json"] + "\n",
         "project-state.json": context["project_state_json"] + "\n",
     }
+
+    if runtime_inline_secrets:
+        rendered_files["runtime-secret.yaml"] = render_template("runtime-secret.yaml.j2", context)
 
     for file_name, content in rendered_files.items():
         (output_dir / file_name).write_text(content, encoding="utf-8")

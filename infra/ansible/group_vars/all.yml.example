@@ -2,9 +2,9 @@ platform_admin_user: ubuntu
 platform_container_runtime: docker
 idea_base_domain: idea.example.internal
 kind_cluster_name: idea
-kind_node_image: kindest/node:v1.30.0
+kind_node_image: kindest/node:v1.33.4
 kind_version: v0.23.0
-kubectl_version: v1.30.3
+kubectl_version: v1.33.4
 helm_version: v3.15.4
 argocd_version: v2.11.7
 enable_monitoring: true

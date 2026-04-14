@@ -6,12 +6,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 import generator
-from api_models import DeployRequest, ProjectState, normalize_project_state
+from api_models import DeployRequest, EnvExchangeRequest, ProjectState, ProvisionRequest, normalize_project_state
+from env_import import apply_env_import, export_env_text, write_export_env_file
+from provisioning import provision_ncloud_target
 
 app = FastAPI(title="idea Control Plane API")
 OUTPUT_ROOT = Path("outputs")
@@ -36,16 +38,26 @@ def runtime_payload(status: str = "ok"):
     }
 
 
+def ensure_project_state_file() -> dict:
+    if PROJECT_STATE_PATH.exists():
+        try:
+            payload = json.loads(PROJECT_STATE_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = {}
+    else:
+        payload = {}
+
+    normalized = normalize_project_state(payload)
+    OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+    PROJECT_STATE_PATH.write_text(
+        json.dumps(normalized, indent=2, ensure_ascii=True) + "\n",
+        encoding="utf-8",
+    )
+    return normalized
+
+
 def load_project_state() -> dict:
-    if not PROJECT_STATE_PATH.exists():
-        return normalize_project_state({})
-
-    try:
-        payload = json.loads(PROJECT_STATE_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return normalize_project_state({})
-
-    return normalize_project_state(payload)
+    return ensure_project_state_file()
 
 
 def save_project_state(payload: ProjectState | dict) -> dict:
@@ -58,6 +70,11 @@ def save_project_state(payload: ProjectState | dict) -> dict:
     return normalized
 
 
+@app.on_event("startup")
+async def startup_event():
+    ensure_project_state_file()
+
+
 @app.get("/api/project-state")
 async def get_project_state():
     return load_project_state()
@@ -66,6 +83,68 @@ async def get_project_state():
 @app.put("/api/project-state")
 async def put_project_state(project_state: ProjectState):
     return save_project_state(project_state)
+
+
+@app.post("/api/project-state/import-env")
+async def import_project_env(
+    selected_env: str = Form(...),
+    env_file: UploadFile | None = File(None),
+    env_text: str = Form(""),
+    project_state: str = Form(""),
+):
+    if selected_env not in {"dev", "stage", "prod"}:
+        raise HTTPException(status_code=400, detail="selected_env must be one of dev, stage, prod.")
+
+    try:
+        payload = normalize_project_state(json.loads(project_state)) if project_state else load_project_state()
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid project_state payload: {exc}") from exc
+
+    if env_file is None and not env_text.strip():
+        raise HTTPException(status_code=400, detail="either env_file or env_text must be provided.")
+
+    if env_file is not None:
+        try:
+            env_payload_text = (await env_file.read()).decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(status_code=400, detail="env file must be UTF-8 encoded text.") from exc
+        file_name = env_file.filename or ".env"
+    else:
+        env_payload_text = env_text
+        file_name = "pasted.env"
+
+    next_state, summary = apply_env_import(payload, selected_env, env_payload_text)
+    saved_state = save_project_state(next_state)
+
+    return {
+        "status": "success",
+        "message": f"{summary['selected_env'].upper()} .env imported into Project State",
+        "project_state": saved_state,
+        "summary": {
+            **summary,
+            "file_name": file_name,
+        },
+    }
+
+
+@app.post("/api/project-state/export-env")
+async def export_project_env(req: EnvExchangeRequest):
+    try:
+        selected_env = req.selected_env
+        state = save_project_state(req.project_state) if req.project_state else load_project_state()
+        env_text = export_env_text(state, selected_env)
+        env_path = write_export_env_file(OUTPUT_ROOT, state["project"]["name"], selected_env, env_text)
+
+        return {
+            "status": "success",
+            "message": f"{selected_env.upper()} .env export generated",
+            "selected_env": selected_env,
+            "file_name": env_path.name,
+            "env_text": env_text,
+            "download_url": f"/api/download-env/{state['project']['name']}/{selected_env}",
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.post("/api/deploy")
@@ -107,8 +186,12 @@ async def deploy_project(req: DeployRequest):
                     zipf.write(os.path.join(root, file), arcname=file)
 
         execution_logs.append(
-            "Bundle generated with namespace, Argo CD application, runtime ConfigMap, and project-state JSON."
+            "Bundle generated with namespace, Argo CD application, runtime ConfigMap, and redacted project-state payload."
         )
+        if any(not str(value).startswith("secret://") for value in state["secrets"][selected_env].values()):
+            execution_logs.append("Inline runtime secrets were materialized into a Kubernetes Secret manifest for Argo CD.")
+        elif state["secrets"][selected_env]:
+            execution_logs.append("Runtime secret refs were kept as refs only. No inline Kubernetes Secret manifest was generated.")
         execution_logs.append(f"Argo CD access hint: {state['argo']['access_hint']}")
 
         return {
@@ -125,6 +208,49 @@ async def deploy_project(req: DeployRequest):
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/provision-target")
+async def provision_target(req: ProvisionRequest):
+    try:
+        selected_env = req.selected_env
+        state = save_project_state(req.project_state)
+        next_state, result = provision_ncloud_target(state, selected_env, OUTPUT_ROOT, apply=req.apply)
+        saved_state = save_project_state(next_state)
+
+        payload = {
+            "status": "success",
+            "selected_env": selected_env,
+            "message": (
+                f"{selected_env.upper()} Ncloud target provisioned."
+                if result["applied"]
+                else f"{selected_env.upper()} Ncloud provisioning dry-run generated."
+            ),
+            "project_state": saved_state,
+            "logs": result["logs"],
+            "runtime_dir": result["runtime_dir"],
+            "applied": result["applied"],
+        }
+
+        if result["applied"]:
+            payload.update(
+                {
+                    "cluster_uuid": result["outputs"]["cluster_uuid"],
+                    "cluster_endpoint": result["outputs"]["cluster_endpoint"],
+                    "kubeconfig_download_url": f"/api/download-provision/{saved_state['project']['name']}/{selected_env}/kubeconfig",
+                    "argocd_cluster_secret_download_url": (
+                        f"/api/download-provision/{saved_state['project']['name']}/{selected_env}/argocd-cluster-secret"
+                    ),
+                }
+            )
+
+        return payload
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.get("/api/healthz")
@@ -154,6 +280,35 @@ async def download_iac_bundle(project: str, env: str):
     raise HTTPException(status_code=404, detail="배포 파일을 찾을 수 없습니다.")
 
 
+@app.get("/api/download-env/{project}/{env}")
+async def download_runtime_env(project: str, env: str):
+    env_path = OUTPUT_ROOT / project / env / f"{project}_{env}.runtime.env"
+    if env_path.exists():
+        return FileResponse(
+            path=env_path,
+            media_type="text/plain; charset=utf-8",
+            filename=f"{project}_{env}.runtime.env",
+        )
+    raise HTTPException(status_code=404, detail="env export file not found.")
+
+
+@app.get("/api/download-provision/{project}/{env}/{artifact}")
+async def download_provision_artifact(project: str, env: str, artifact: str):
+    runtime_dir = OUTPUT_ROOT / project / env / "ncloud-runtime"
+    artifact_map = {
+        "kubeconfig": runtime_dir / "kubeconfig.yaml",
+        "argocd-cluster-secret": runtime_dir / "argocd-cluster-secret.yaml",
+    }
+    target = artifact_map.get(artifact)
+    if target and target.exists():
+        return FileResponse(
+            path=target,
+            media_type="text/plain; charset=utf-8",
+            filename=target.name,
+        )
+    raise HTTPException(status_code=404, detail="provisioning artifact not found.")
+
+
 @app.post("/api/traffic/switch")
 async def switch_traffic(data: dict):
     target = data.get("target_color", "blue")
@@ -168,7 +323,7 @@ async def switch_traffic(data: dict):
 async def root():
     return {
         **runtime_payload(),
-        "message": "Use /api/project-state, /api/deploy, /api/download, or /api/healthz.",
+        "message": "Use /api/project-state, /api/project-state/import-env, /api/project-state/export-env, /api/deploy, /api/download, or /api/healthz.",
     }
 
 

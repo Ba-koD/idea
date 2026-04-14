@@ -583,10 +583,11 @@ data:
               return;
             }
 
-            const target = projectState.targets[currentEnv];
-            const runtimeEnv = projectState.env[currentEnv];
-            const runtimeSecrets = projectState.secrets[currentEnv];
-            const ncloud = target.ncloud || {};
+	            const target = projectState.targets[currentEnv];
+	            const runtimeEnv = projectState.env[currentEnv];
+	            const runtimeSecrets = projectState.secrets[currentEnv];
+	            const ncloud = target.ncloud || {};
+	            const cloudflareEnv = (projectState.cloudflare.environments || {})[currentEnv] || {};
 
             summaryProjectEl.textContent = projectState.project.name;
             summaryRepoEl.textContent = projectState.project.app_repo_url;
@@ -629,10 +630,10 @@ data:
             setValue("target-autoscale-min", ncloud.autoscale_min_node_count);
             setValue("target-autoscale-max", ncloud.autoscale_max_node_count);
 
-            setValue("cloudflare-base-domain", projectState.cloudflare.base_domain);
-            setValue("cloudflare-subdomain-prefix", projectState.cloudflare.public_subdomain_prefix);
-            setValue("cloudflare-tunnel-name", projectState.cloudflare.tunnel_name);
-            setValue("cloudflare-route-mode", projectState.cloudflare.route_mode);
+	            setValue("cloudflare-base-domain", cloudflareEnv.base_domain || projectState.cloudflare.base_domain || "");
+	            setValue("cloudflare-subdomain-prefix", cloudflareEnv.subdomain || projectState.cloudflare.public_subdomain_prefix || "");
+	            setValue("cloudflare-tunnel-name", projectState.cloudflare.tunnel_name);
+	            setValue("cloudflare-route-mode", projectState.cloudflare.route_mode);
 
             setValue("routing-dev-hostname", projectState.routing.dev_hostname);
             setValue("routing-stage-hostname", projectState.routing.stage_hostname);
@@ -768,7 +769,7 @@ data:
     const projectState = {
       project: {
         name: "repo-example",
-        app_repo_url: "https://github.com/Ba-koD/repo_example.git",
+        app_repo_url: "https://github.com/Ba-koD/repo_example",
         git_ref: "main",
         repo_access_secret_ref: "github-repo-example-token",
       },
@@ -781,22 +782,35 @@ data:
       },
       argo: {
         project_name: "default",
-        destination_name: "ncloud-nks-dev",
+        destination_name: "",
         destination_server: "https://kubernetes.default.svc",
         gitops_repo_url: "https://github.com/Ba-koD/idea.git",
         gitops_repo_branch: "main",
-        gitops_repo_path: "gitops/generated/repo-example",
+        gitops_repo_path: "gitops/apps",
         gitops_repo_access_secret_ref: "gitops-repo-token",
+        access_hint: "ssh MacMini && kubectl -n argocd port-forward svc/argocd-server 8081:80",
       },
       cloudflare: {
         enabled: true,
         account_id: "2052eb94f7b555bd3bf9db83c1f4edbf",
         zone_id: "aaafd11f9c6912ba37c1d52a69b78398",
-        base_domain: "rnen.kr",
-        public_subdomain_prefix: "repo-example",
         api_token_secret_ref: "cloudflare-api-token",
         tunnel_name: "repo-example-platform",
         route_mode: "platform_caddy",
+        environments: {
+          dev: {
+            subdomain: "repo-example-dev",
+            base_domain: "rnen.kr",
+          },
+          stage: {
+            subdomain: "repo-example-stage",
+            base_domain: "rnen.kr",
+          },
+          prod: {
+            subdomain: "repo-example",
+            base_domain: "rnen.kr",
+          },
+        },
       },
       targets: {
         dev: {
@@ -807,7 +821,7 @@ data:
           ncloud: {
             region_code: "KR",
             cluster_name: "idea-dev",
-            cluster_version: "1.30",
+            cluster_version: "1.33.4",
             zone_code: "KR-2",
             vpc_no: "vpc-dev",
             subnet_no: "subnet-dev",
@@ -831,7 +845,7 @@ data:
           ncloud: {
             region_code: "KR",
             cluster_name: "idea-stage",
-            cluster_version: "1.30",
+            cluster_version: "1.33.4",
             zone_code: "KR-2",
             vpc_no: "vpc-stage",
             subnet_no: "subnet-stage",
@@ -855,7 +869,7 @@ data:
           ncloud: {
             region_code: "KR",
             cluster_name: "idea-prod",
-            cluster_version: "1.30",
+            cluster_version: "1.33.4",
             zone_code: "KR-2",
             vpc_no: "vpc-prod",
             subnet_no: "subnet-prod",
@@ -895,23 +909,19 @@ data:
           APP_ENV: "prod",
           APP_DISPLAY_NAME: "Repo Example Prod",
           PUBLIC_API_BASE_URL: "/api",
+          NODE_ENV: "production",
         },
       },
       secrets: {
-        dev: {
-          EXAMPLE_API_TOKEN: "secret://repo-example/dev/example-api-token",
-        },
-        stage: {
-          EXAMPLE_API_TOKEN: "secret://repo-example/stage/example-api-token",
-        },
-        prod: {
-          EXAMPLE_API_TOKEN: "secret://repo-example/prod/example-api-token",
-        },
+        dev: {},
+        stage: {},
+        prod: {},
       },
       access: {
         admin_allowed_source_ips: ["58.123.221.76/32"],
         dev_allowed_source_ips: ["58.123.221.76/32"],
         stage_allowed_source_ips: ["58.123.221.76/32"],
+        prod_allowed_source_ips: [],
       },
       delivery: {
         prod_blue_green_enabled: true,

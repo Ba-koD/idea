@@ -137,6 +137,14 @@ Important:
 - app repo 변경만으로는 배포되지 않는다.
 - GitOps manifest가 바뀌어야 Argo CD가 움직인다.
 
+현재 구현 상태:
+
+- `.env` file import / text import는 구현돼 있다.
+- `Project State -> GitOps bundle` 생성도 구현돼 있다.
+- `POST /api/provision-target` 경로로 Ncloud VPC/Subnet/NKS runtime provisioning 1차 경로도 구현돼 있다.
+- provisioning 결과로 `cluster_uuid`, subnet id, endpoint, kubeconfig, Argo CD cluster secret manifest가 나온다.
+- prod blue-green도 현재는 state/UI 플래그만 있고, 실제 manifest 2벌 생성은 아직 없다.
+
 ---
 
 ## 6. Ncloud Default Model
@@ -165,6 +173,16 @@ Important:
 - UI는 secret 값을 저장하지 않고 secret ref만 `Project State`에 남긴다.
 - Ncloud access key/secret key는 target별로 분리 가능해야 한다.
 - `cluster_access_secret`가 있으면 kubeconfig 기반 연결도 허용한다.
+- 실제 Ncloud provisioning 구현에는 최소 `region_code`, `zone_code`, `cluster_name`, `vpc_no`, `subnet_no`, `lb_subnet_no`, `node_pool_name`, `node_count`, `node_product_code`, `block_storage_size_gb`, `access_key_secret_ref`, `secret_key_secret_ref`가 필요하다.
+- 실제 apply 전 수동 확인이 필요한 값:
+  - 지원되는 Kubernetes version인지 확인
+    - `1.33.4`
+    - `1.34.3`
+    - `1.32.8`
+  - Ncloud login key name
+  - 실제 access key / secret key 값
+  - 기존 리소스를 재사용하려면 `cluster_uuid`, `vpc_no`, `subnet_no`, `lb_subnet_no`
+  - 신규 리소스를 만들면 placeholder `vpc-*` / `subnet-*` 값은 backend가 실제 id로 대체한다
 
 ---
 

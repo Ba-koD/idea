@@ -53,6 +53,10 @@ textarea {
   font: inherit;
 }
 
+.hidden-file-input {
+  display: none;
+}
+
 .app-container {
   display: flex;
   flex-direction: column;
@@ -244,6 +248,7 @@ textarea {
 }
 
 .form-group input,
+.form-group select,
 .form-group textarea {
   width: 100%;
   max-width: 100%;
@@ -261,6 +266,10 @@ textarea {
   resize: vertical;
   color: #4ade80;
   min-height: 88px;
+}
+
+.form-group select {
+  color: #e2e8f0;
 }
 
 .hostname-preview,
@@ -303,6 +312,39 @@ textarea {
   line-height: 1.5;
   color: #d1d5db;
   white-space: pre-wrap;
+}
+
+.env-import-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.env-import-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.env-import-btn {
+  width: 100%;
+  padding: 10px 12px;
+  text-align: center;
+}
+
+.env-import-note {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.import-summary-box pre {
+  color: #cbd5e1;
+}
+
+.env-download-link {
+  margin-top: 0;
 }
 
 .action-row {
@@ -587,6 +629,10 @@ textarea {
   .action-row {
     grid-template-columns: 1fr;
     display: grid;
+  }
+
+  .env-import-actions {
+    grid-template-columns: 1fr;
   }
 
   .hostname-preview {

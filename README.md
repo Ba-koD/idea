@@ -5,6 +5,8 @@
 
 상세 설계와 고정 아키텍처 원칙은 [PROJECT_SPEC.md](/mnt/c/Users/rudgh/idea/PROJECT_SPEC.md)를 기준으로 합니다.
 
+설정 경계와 실제 import 파일 기준은 [CONFIGURATION_SPLIT.md](/mnt/c/Users/rudgh/idea/CONFIGURATION_SPLIT.md)를 봅니다. 플랫폼 설치용 GitHub Actions 값과 `tmp` runtime provisioning `.env` 값은 같은 곳에서 관리하지 않습니다.
+
 ## Overview
 
 `idea`는 애플리케이션 자체가 아니라, 애플리케이션을 배포하고 운영하기 위한 플랫폼입니다.
@@ -35,6 +37,33 @@
 - `idea`의 Cloudflare reconciler가 Cloudflare API를 통해 Tunnel, hostname, IP allowlist, WAF rule을 반영합니다.
 - 플랫폼 `Caddy`가 환경별 hostname과 same-origin `/api` 라우팅을 담당합니다.
 - Monitoring 화면에서 배포 상태, active color, 로그, health 상태를 보여줍니다.
+
+## Configuration Boundary
+
+현재 운영 입력은 두 층으로 분리됩니다.
+
+- 플랫폼 설치용 값
+  - GitHub Actions secrets / variables
+  - 기준 문서: [infra/README.md](/mnt/c/Users/rudgh/idea/infra/README.md)
+- 서비스 프로비저닝 값
+  - `idea` UI의 `Project State`
+  - `.env` file import 또는 text import
+  - 기준 문서: [CONFIGURATION_SPLIT.md](/mnt/c/Users/rudgh/idea/CONFIGURATION_SPLIT.md)
+
+로컬 import 테스트 파일:
+
+- [`.env`](/mnt/c/Users/rudgh/idea/.env)
+- [`.env.stage`](/mnt/c/Users/rudgh/idea/.env.stage)
+- [`.env.prod`](/mnt/c/Users/rudgh/idea/.env.prod)
+
+규칙은 단순합니다.
+
+- `IDEA_*` 키는 `Project State`를 갱신합니다.
+- `IDEA_REPO_ACCESS_TOKEN_VALUE`, `IDEA_GITOPS_REPO_ACCESS_TOKEN_VALUE`, `IDEA_CLOUDFLARE_API_TOKEN_VALUE`, `IDEA_NCLOUD_ACCESS_KEY_VALUE`, `IDEA_NCLOUD_SECRET_KEY_VALUE`는 control-plane secret 값으로 들어갑니다.
+- prefix 없는 키는 runtime env 또는 runtime secret으로 들어갑니다.
+- file import와 text import는 같은 parser를 사용합니다.
+- `*_SECRET_REF`는 논리 이름이고, `*_VALUE`는 실제 자격증명 값입니다.
+- 루트 [`.env`](/mnt/c/Users/rudgh/idea/.env), [`.env.stage`](/mnt/c/Users/rudgh/idea/.env.stage), [`.env.prod`](/mnt/c/Users/rudgh/idea/.env.prod)는 slim import 예시이며 `PLATFORM_*` 값은 포함하지 않습니다.
 
 ## How It Works
 
@@ -73,6 +102,8 @@
 - 배포 대상 클러스터 또는 서버
   - 기본 provider `ncloud`
   - 기본 cluster type `nks`
+  - 기본 Kubernetes version `1.33.4`
+  - 현재 UI 기본 선택지는 `1.33.4`, `1.34.3`, `1.32.8`
   - `ncloud_access_key`
   - `ncloud_secret_key`
 - prod blue-green 설정
@@ -99,10 +130,11 @@ Cloudflare API 호출은 `idea`의 reconciler가 담당합니다.
 1. `repo B`에 코드 변경이 push되거나, 운영자가 웹 UI에서 배포를 요청합니다.
 2. 운영자가 웹 UI에서 저장한 `Project State`에는 repo URL, build 경로, Argo CD 대상, 배포 환경별 값, routing 규칙이 포함됩니다.
 3. `tmp 배포 계층`이 `Project State + repo B 구조`를 읽고, 필요한 경우 이미지를 build/push한 뒤 GitOps manifest를 생성하거나 갱신합니다.
-4. 이 변경이 Argo CD가 감시하는 GitOps repo/path에 기록됩니다.
-5. Argo CD가 diff를 감지하고 Kubernetes에 sync합니다.
-6. 필요한 경우 migration이나 smoke test는 `Job` 또는 hook manifest로 실행됩니다.
-7. Cloudflare 관련 변경은 별도 reconciler가 API로 반영합니다.
+4. 필요하면 `tmp` backend가 `POST /api/provision-target`으로 Ncloud NKS target을 Terraform으로 생성하거나 기존 target 정보를 fetch합니다.
+5. 이 변경이 Argo CD가 감시하는 GitOps repo/path에 기록됩니다.
+6. Argo CD가 diff를 감지하고 Kubernetes에 sync합니다.
+7. 필요한 경우 migration이나 smoke test는 `Job` 또는 hook manifest로 실행됩니다.
+8. Cloudflare 관련 변경은 별도 reconciler가 API로 반영합니다.
 
 중요한 점:
 
@@ -214,9 +246,10 @@ APP_PORT=8080
 LOG_LEVEL=info
 DATABASE_URL=postgres://user:password@db:5432/app
 REDIS_URL=redis://:password@redis:6379/0
-JWT_SECRET=replace-me
-SESSION_SECRET=replace-me
-THIRD_PARTY_API_KEY=replace-me
+# Optional, only if the app uses them:
+# JWT_SECRET=replace-me
+# SESSION_SECRET=replace-me
+# THIRD_PARTY_API_KEY=replace-me
 ```
 
 `idea`는 이를 구조화 저장하고, 배포 시 `ConfigMap / Secret`으로 렌더링합니다.

@@ -9,7 +9,9 @@ metadata:
 spec:
   project: {{ argo.project_name }}
   destination:
+{% if argo.destination_name %}
     name: {{ argo.destination_name }}
+{% endif %}
     namespace: {{ target.namespace }}
     server: {{ argo.destination_server }}
   source:

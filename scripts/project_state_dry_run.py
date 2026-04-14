@@ -97,7 +97,7 @@ def collect_secret_refs(state: dict) -> list[str]:
 
     for secret_map in state.get("secrets", {}).values():
         for value in secret_map.values():
-            if isinstance(value, str):
+            if isinstance(value, str) and value.startswith("secret://"):
                 refs.add(value)
 
     return sorted(refs)

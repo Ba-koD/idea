@@ -74,7 +74,7 @@ variable "kind_cluster_name" {
 variable "kind_node_image" {
   description = "Kind node image."
   type        = string
-  default     = "kindest/node:v1.30.0"
+  default     = "kindest/node:v1.33.4"
 }
 
 variable "kind_version" {
@@ -86,7 +86,7 @@ variable "kind_version" {
 variable "kubectl_version" {
   description = "kubectl binary version."
   type        = string
-  default     = "v1.30.3"
+  default     = "v1.33.4"
 }
 
 variable "helm_version" {

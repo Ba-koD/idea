@@ -14,11 +14,11 @@
   },
   "argo": {
     "project_name": "default",
-    "destination_name": "ncloud-nks-dev",
+    "destination_name": "",
     "destination_server": "https://kubernetes.default.svc",
     "gitops_repo_url": "https://github.com/Ba-koD/idea.git",
     "gitops_repo_branch": "main",
-    "gitops_repo_path": "gitops/generated/repo-example",
+    "gitops_repo_path": "gitops/apps",
     "gitops_repo_access_secret_ref": "gitops-repo-token",
     "access_hint": "ssh MacMini && kubectl -n argocd port-forward svc/argocd-server 8081:80"
   },
@@ -53,7 +53,7 @@
       "ncloud": {
         "region_code": "KR",
         "cluster_name": "idea-dev",
-        "cluster_version": "1.30",
+        "cluster_version": "1.33.4",
         "auth_method": "access_key",
         "access_key_secret_ref": "ncloud-dev-access-key",
         "secret_key_secret_ref": "ncloud-dev-secret-key",
@@ -78,7 +78,7 @@
       "ncloud": {
         "region_code": "KR",
         "cluster_name": "idea-stage",
-        "cluster_version": "1.30",
+        "cluster_version": "1.33.4",
         "auth_method": "access_key",
         "access_key_secret_ref": "ncloud-stage-access-key",
         "secret_key_secret_ref": "ncloud-stage-secret-key",
@@ -103,7 +103,7 @@
       "ncloud": {
         "region_code": "KR",
         "cluster_name": "idea-prod",
-        "cluster_version": "1.30",
+        "cluster_version": "1.33.4",
         "auth_method": "access_key",
         "access_key_secret_ref": "ncloud-prod-access-key",
         "secret_key_secret_ref": "ncloud-prod-secret-key",
@@ -148,15 +148,9 @@
     }
   },
   "secrets": {
-    "dev": {
-      "EXAMPLE_API_TOKEN": "secret://repo-example/dev/example-api-token"
-    },
-    "stage": {
-      "EXAMPLE_API_TOKEN": "secret://repo-example/stage/example-api-token"
-    },
-    "prod": {
-      "EXAMPLE_API_TOKEN": "secret://repo-example/prod/example-api-token"
-    }
+    "dev": {},
+    "stage": {},
+    "prod": {}
   },
   "access": {
     "admin_allowed_source_ips": [

@@ -47,11 +47,11 @@ build:
 
 argo:
   project_name: default
-  destination_name: ncloud-nks-dev
+  destination_name: ""
   destination_server: https://kubernetes.default.svc
   gitops_repo_url: https://github.com/Ba-koD/idea.git
   gitops_repo_branch: main
-  gitops_repo_path: gitops/generated/repo-example
+  gitops_repo_path: gitops/apps
   gitops_repo_access_secret_ref: gitops-repo-token
   access_hint: ssh MacMini && kubectl -n argocd port-forward svc/argocd-server 8081:80
 
@@ -132,12 +132,9 @@ env:
     NODE_ENV: production
 
 secrets:
-  dev:
-    EXAMPLE_API_TOKEN: secret://repo-example/dev/example-api-token
-  stage:
-    EXAMPLE_API_TOKEN: secret://repo-example/stage/example-api-token
-  prod:
-    EXAMPLE_API_TOKEN: secret://repo-example/prod/example-api-token
+  dev: {}
+  stage: {}
+  prod: {}
 
 access:
   admin_allowed_source_ips:
@@ -158,6 +155,42 @@ delivery:
 ---
 
 ## 4. Required Runtime UI Sections
+
+## 3.1 .env Import / Export Contract
+
+UI와 API는 `.env` text import와 file import를 모두 지원한다.
+
+- `POST /api/project-state/import-env`
+  - `env_file` 또는 `env_text`
+  - `selected_env`
+- `POST /api/project-state/export-env`
+  - 현재 `selected_env` 기준 `.env` 생성
+- `POST /api/provision-target`
+  - `selected_env`
+  - `project_state`
+  - `apply`
+  - Terraform 기반 Ncloud target provisioning 또는 dry-run
+
+Ncloud provisioning 기본값:
+
+- 기본 Kubernetes version: `1.33.4`
+- 현재 지원 선택지: `1.33.4`, `1.34.3`, `1.32.8`
+- `login_key_name`은 실제 Ncloud에 이미 존재하는 key 이름이어야 한다.
+
+규칙:
+
+- `IDEA_*` 키는 `Project State` 필드에 매핑된다.
+- `IDEA_*_VALUE` 키는 control-plane secret value로 저장된다.
+- prefix 없는 키는 runtime env 또는 runtime secret으로 들어간다.
+- `SECRET`, `TOKEN`, `PASSWORD`, `JWT`, `DATABASE_URL` 류 key는 secret으로 분리된다.
+- `IDEA_IMPORT_MODE=replace`면 현재 환경값을 덮어쓴다.
+- `IDEA_SELECTED_ENV`가 있으면 해당 env가 우선한다.
+
+로컬 import 테스트 파일:
+
+- [`.env`](/mnt/c/Users/rudgh/idea/.env)
+- [`.env.stage`](/mnt/c/Users/rudgh/idea/.env.stage)
+- [`.env.prod`](/mnt/c/Users/rudgh/idea/.env.prod)
 
 ### Repository
 
@@ -258,6 +291,13 @@ UI note:
 ### Delivery Policy
 
 - `delivery.prod_blue_green_enabled`
+
+Important:
+
+- 현재 schema와 UI는 `prod_blue_green_enabled`를 지원한다.
+- 하지만 현재 GitOps generator는 아직 실제 `blue`/`green` workload 두 벌을 만들지 않는다.
+- 즉 현재는 정책 플래그와 UI 상태까지만 구현돼 있다.
+- Ncloud runtime provisioning은 구현돼 있지만, Cloudflare env reconcile은 아직 별도 단계다.
 - `delivery.healthcheck_path`
 - `delivery.healthcheck_timeout_seconds`
 - `delivery.rollback_on_failure`

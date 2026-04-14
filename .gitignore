@@ -7,6 +7,8 @@ infra/terraform/terraform.tfvars
 infra/ansible/generated/
 *.retry
 .env
+/.env.stage
+/.env.prod
 node_modules/
 __pycache__/
 

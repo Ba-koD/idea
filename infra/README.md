@@ -32,7 +32,6 @@ GitHub Actions 설정:
   - `PLATFORM_TARGET_USER`
   - `PLATFORM_POSTGRESQL_PASSWORD`
   - `PLATFORM_VAULT_DEV_ROOT_TOKEN`
-- private GitOps repo access에서 추가 필수 repository secret
 - Cloudflare API 자동화 모드에서 추가 필수 repository secrets
   - `PLATFORM_CLOUDFLARE_API_TOKEN`
 - 수동 tunnel token 모드에서만 필요한 선택 repository secret
@@ -59,10 +58,6 @@ GitHub Actions 설정:
   - 배포 제어 대상 호스트. 현재 구조에서는 보통 `ssh.rnen.kr`
 - `PLATFORM_TARGET_USER`
   - 해당 호스트에 접속할 SSH 사용자. 현재 구조에서는 예: `rudgh`
-  - Argo CD가 GitOps repo를 읽기 위한 GitHub token
-  - 현재 repo가 private이면 필수
-  - 최소 권한은 대상 repo `Contents: Read`
-  - 현재 repo 안에서 Argo CD가 감시할 manifest 경로
 - `PLATFORM_CLOUDFLARE_ACCOUNT_ID`
   - Tunnel API에 쓰는 Cloudflare account ID
 - `PLATFORM_CLOUDFLARE_ZONE_ID`
@@ -100,6 +95,7 @@ Cloudflare API token 권한:
 - 이 IaC workflow는 `idea` 플랫폼 설치만 담당한다.
 - 사용자 서비스 app repo 등록, build 정보, env, 배포 대상, Argo CD 연결, Caddy hostname 라우팅은 런타임 `idea UI`와 `tmp` 서비스가 관리한다.
 - 즉 `PLATFORM_APP_REPO_URL` 같은 값은 더 이상 platform install workflow 입력이 아니다.
+- runtime provisioning용 `.env` import 파일은 루트 [`.env`](/mnt/c/Users/rudgh/idea/.env), [`.env.stage`](/mnt/c/Users/rudgh/idea/.env.stage), [`.env.prod`](/mnt/c/Users/rudgh/idea/.env.prod) 기준으로 테스트할 수 있다.
 
 Cloudflare API 자동화 결과:
 
