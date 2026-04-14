@@ -110,19 +110,16 @@ textarea {
 }
 
 .content-layout {
-  display: grid;
-  grid-template-columns: 420px minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) auto;
+  display: flex;
   flex: 1;
   padding: 15px;
   gap: 15px;
   overflow: hidden;
-  align-items: stretch;
   min-width: 0;
 }
 
 .sidebar {
-  width: 100%;
+  width: 420px;
   background: var(--card-bg);
   padding: 18px;
   border-radius: 12px;
@@ -130,9 +127,6 @@ textarea {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  grid-column: 1;
-  grid-row: 1;
-  height: 100%;
   min-height: 0;
   min-width: 0;
 }
@@ -427,13 +421,12 @@ textarea {
 }
 
 .main-view {
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 16px;
   overflow-y: auto;
   padding-right: 10px;
-  grid-column: 2;
-  grid-row: 1;
   min-height: 0;
   min-width: 0;
 }
@@ -581,8 +574,6 @@ textarea {
   font-size: 0.8rem;
   border-radius: 10px;
   border: 1px solid var(--border-color);
-  grid-column: 2;
-  grid-row: 2;
   min-width: 0;
 }
 
@@ -605,12 +596,8 @@ textarea {
 }
 
 @media (max-width: 1360px) {
-  .content-layout {
-    grid-template-columns: 390px minmax(0, 1fr);
-  }
-
   .sidebar {
-    width: 100%;
+    width: 390px;
   }
 
   .topology-summary {
@@ -629,14 +616,12 @@ textarea {
   }
 
   .content-layout {
-    display: flex;
     flex-direction: column;
     overflow: visible;
   }
 
   .sidebar {
     width: auto;
-    height: auto;
   }
 
   .main-view {
