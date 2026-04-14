@@ -7,11 +7,9 @@ function App() {
   const [prodActiveColor, setProdActiveColor] = useState('blue');
   const [showToken, setShowToken] = useState(false);
   
-  // 상태 관리: 실시간 로그 및 다운로드 URL
   const [logs, setLogs] = useState([]);
   const [downloadUrl, setDownloadUrl] = useState(null);
   
-  // 로그 자동 스크롤을 위한 Ref
   const logEndRef = useRef(null);
 
   const [projectInfo, setProjectInfo] = useState({
@@ -29,7 +27,6 @@ function App() {
     prod: { envVars: 'DB_HOST=db-svc\nDEBUG=false', replica: 3, color: '#10b981' }
   });
 
-  // 로그가 추가될 때마다 자동으로 스크롤 하단 이동
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
@@ -93,7 +90,7 @@ function App() {
     setProjectInfo({ ...projectInfo, [field]: value });
   };
 
-  // 다이어그램 설정: 폰트와 간격을 대폭 키움
+  // ✅ 핵심 수정 부분: 텍스트 잘림 방지를 위한 스타일 및 간격 조정
   const getDiagramCode = () => {
     const isProd = activeEnv === 'prod';
     const envLabel = activeEnv.toUpperCase();
@@ -103,56 +100,54 @@ function App() {
     return `%%{init: {
         'theme': 'base', 
         'themeVariables': { 
-          'fontSize': '32px', 
+          'fontSize': '15px', 
           'fontFamily': 'Pretendard, sans-serif',
-          'primaryColor': '#fff',
-          'edgeLabelBackground':'#ffffff',
-          'mainBkg': '#ffffff',
-          'nodeBorder': '${themeColor}',
-          'lineColor': '#232F3E'
+          'primaryColor': '#ffffff',
+          'primaryTextColor': '#0f172a',
+          'lineColor': '#64748b',
+          'tertiaryColor': '#f8fafc'
         },
         'flowchart': { 
           'htmlLabels': true, 
           'curve': 'basis',
-          'nodeSpacing': 100,
-          'rankSpacing': 150,
-          'useMaxWidth': false
+          'nodeSpacing': 60,
+          'rankSpacing': 90,
+          'padding': 20
         }
       }}%%
-      graph TD
-      classDef clusterBox fill:none,stroke:${themeColor},stroke-width:4px,stroke-dasharray: 10 5;
-      classDef nodeStyle fill:#fff,stroke:#232F3E,stroke-width:3px,rx:15,ry:15;
-      classDef activeNode fill:${themeColor},color:#fff,stroke-width:6px,rx:15,ry:15;
+      graph LR
+      classDef clusterBox fill:#f8fafc,stroke:${themeColor},stroke-width:2px,stroke-dasharray: 5 5,rx:10,ry:10;
+      classDef nodeStyle fill:#fff,color:#0f172a,stroke:#cbd5e1,stroke-width:2px,rx:8,ry:8,font-weight:bold;
+      classDef activeNode fill:${themeColor},color:#fff,stroke-width:0px,rx:8,ry:8,font-weight:bold;
 
       subgraph External [Internet Access]
-        User((User)) --> CF((☁️ Cloudflare Tunnel: ${currentDomain}))
+        User((👤 User)) --> CF((☁️ CF Tunnel<br/>${currentDomain}))
       end
 
       subgraph Platform [idea Control Plane]
-        direction TB
-        CF --> Caddy["🌐 Platform Caddy (Reverse Proxy)"]
+        CF --> Caddy["🌐 Platform Caddy<br/>(Reverse Proxy)"]
         
         subgraph Cluster [kind Cluster: ${envLabel}]
-          direction TB
           ${isProd ? `
             Caddy -->|Active| Blue
             Caddy -.->|Standby| Green
             Blue["📦 Prod-Slot: BLUE"]
             Green["📦 Prod-Slot: GREEN"]
             DB["🗄️ K8s Service: DB"]
-            Blue & Green --> DB
+            Blue --> DB
+            Green --> DB
           ` : `
-            Caddy --> Svc["🔌 K8s Service: ${envLabel}"]
-            Svc --> Pod1["📦 App Pod (Replica 1)"]
-            ${envs[activeEnv].replica > 1 ? `Svc --> Pod2["📦 App Pod (Replica 2+)"]` : ''}
+            Caddy --> Svc["🔌 K8s Service<br/>${envLabel}"]
+            Svc --> Pod1["📦 App Pod<br/>(Replica 1)"]
+            ${envs[activeEnv].replica > 1 ? `Svc --> Pod2["📦 App Pod<br/>(Replica 2+)"]` : ''}
             DB["🗄️ K8s Service: DB"]
             Svc --> DB
           `}
         end
       end
 
-      class Cluster clusterBox;
-      class CF,Caddy,Svc,Pod1,Pod2,Blue,Green,DB nodeStyle;
+      class External,Platform,Cluster clusterBox;
+      class User,CF,Caddy,Svc,Pod1,Pod2,Blue,Green,DB nodeStyle;
       ${isProd ? `class ${prodActiveColor === 'blue' ? 'Blue' : 'Green'} activeNode;` : ''}
     `;
   };
