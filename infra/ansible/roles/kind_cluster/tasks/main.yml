@@ -1,19 +1,19 @@
 - name: Ensure kubeconfig directory exists
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.file:
     path: "{{ platform_kubeconfig_path | dirname }}"
     state: directory
     mode: "0755"
 
 - name: Render kind cluster config
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.template:
     src: "{{ playbook_dir }}/templates/kind-config.yaml.j2"
     dest: /tmp/idea-kind-config.yaml
     mode: "0644"
 
 - name: Check existing kind clusters
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - kind
@@ -26,7 +26,7 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Create kind cluster
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - kind
@@ -42,7 +42,7 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Wait for cluster nodes to become ready
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - kubectl

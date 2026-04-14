@@ -9,8 +9,8 @@
     - name: Assert supported operating system
       ansible.builtin.assert:
         that:
-          - ansible_system in ["Linux", "Darwin"]
-          - ansible_system != "Linux" or (ansible_os_family == "Debian" and ansible_distribution == "Ubuntu")
+          - ansible_facts["system"] in ["Linux", "Darwin"]
+          - ansible_facts["system"] != "Linux" or (ansible_facts["os_family"] == "Debian" and ansible_facts["distribution"] == "Ubuntu")
         fail_msg: "This MVP playbook currently supports Ubuntu Linux and macOS only."
 
     - name: Assert supported runtime

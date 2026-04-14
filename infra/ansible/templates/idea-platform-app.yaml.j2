@@ -117,6 +117,8 @@ metadata:
   labels:
     app.kubernetes.io/instance: idea-platform
 spec:
+  strategy:
+    type: Recreate
   replicas: {{ idea_backend_replicas }}
   selector:
     matchLabels:

@@ -1,5 +1,5 @@
 - name: Ensure edge namespace exists
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.shell: |
     kubectl create namespace {{ edge_namespace }} --dry-run=client -o yaml | kubectl apply -f -
   args:
@@ -17,14 +17,14 @@
     cloudflare_admin_allowed_ips_normalized: "{{ cloudflare_admin_allowed_ips | default([]) | map('trim') | reject('equalto', '') | list }}"
 
 - name: Render platform Caddy manifest
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.template:
     src: "{{ playbook_dir }}/templates/platform-caddy.yaml.j2"
     dest: /tmp/platform-caddy.yaml
     mode: "0644"
 
 - name: Apply platform Caddy manifest
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - kubectl
@@ -36,7 +36,7 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Wait for platform Caddy rollout
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - kubectl
@@ -407,7 +407,7 @@
   no_log: true
 
 - name: Render cloudflared manifest
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.template:
     src: "{{ playbook_dir }}/templates/cloudflared.yaml.j2"
     dest: /tmp/cloudflared.yaml
@@ -417,7 +417,7 @@
     - cloudflared_effective_token | length > 0
 
 - name: Apply cloudflared manifest
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - kubectl
@@ -432,7 +432,7 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Wait for cloudflared rollout
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - kubectl

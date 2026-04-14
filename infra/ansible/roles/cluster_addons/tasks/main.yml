@@ -1,5 +1,5 @@
 - name: Ensure argocd namespace exists
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.shell: |
     kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
   args:
@@ -10,7 +10,7 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Install Argo CD
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - kubectl
@@ -24,7 +24,7 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Configure Argo CD server for reverse proxy mode
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.shell: |
     cat <<'EOF' | kubectl apply -f -
     apiVersion: v1
@@ -43,7 +43,7 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Wait for Argo CD server deployment
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - kubectl
@@ -59,7 +59,7 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Restart Argo CD server after reverse proxy config
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - kubectl
@@ -74,7 +74,7 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Wait for Argo CD server restart rollout
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - kubectl
@@ -90,7 +90,7 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Add Helm repositories required for add-ons
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - helm
@@ -108,7 +108,7 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Update Helm repositories
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - helm
@@ -120,7 +120,7 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Render monitoring values
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.template:
     src: "{{ playbook_dir }}/templates/kube-prometheus-stack-values.yaml.j2"
     dest: /tmp/kube-prometheus-stack-values.yaml
@@ -128,7 +128,7 @@
   when: enable_monitoring
 
 - name: Install kube-prometheus-stack
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - helm
@@ -152,7 +152,7 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Ensure data namespace exists
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.shell: |
     kubectl create namespace {{ data_namespace }} --dry-run=client -o yaml | kubectl apply -f -
   args:
@@ -163,7 +163,7 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Uninstall legacy PostgreSQL Helm release if present
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - helm
@@ -180,14 +180,14 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Render PostgreSQL manifest
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.template:
     src: "{{ playbook_dir }}/templates/postgresql.yaml.j2"
     dest: /tmp/idea-postgresql.yaml
     mode: "0644"
 
 - name: Install internal PostgreSQL
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - kubectl
@@ -199,7 +199,7 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Wait for PostgreSQL deployment rollout
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - kubectl
@@ -215,7 +215,7 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Render Vault values
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.template:
     src: "{{ playbook_dir }}/templates/vault-values.yaml.j2"
     dest: /tmp/idea-vault-values.yaml
@@ -223,7 +223,7 @@
   when: enable_vault
 
 - name: Install Vault dev mode
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - helm

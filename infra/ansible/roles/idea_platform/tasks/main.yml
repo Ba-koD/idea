@@ -1,5 +1,5 @@
 - name: Ensure idea namespace exists
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.shell: |
     kubectl create namespace {{ idea_namespace }} --dry-run=client -o yaml | kubectl apply -f -
   args:
@@ -10,7 +10,7 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Remove legacy idea Argo CD application finalizers
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.shell: |
     set -euo pipefail
     if kubectl get application idea-platform -n argocd >/dev/null 2>&1; then
@@ -24,7 +24,7 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Delete legacy idea Argo CD application
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - kubectl
@@ -40,7 +40,7 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Wait for legacy idea Argo CD application removal
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.shell: |
     set -euo pipefail
     for _ in $(seq 1 30); do
@@ -59,7 +59,7 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Delete legacy Argo CD repository credential
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - kubectl
@@ -75,27 +75,27 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Reset platform app build workspace
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.file:
     path: "{{ idea_build_workspace }}"
     state: absent
 
 - name: Create platform app build workspace
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.file:
     path: "{{ idea_build_workspace }}"
     state: directory
     mode: "0755"
 
 - name: Create Docker config directory for non-interactive builds
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.file:
     path: "{{ idea_docker_config_dir }}"
     state: directory
     mode: "0700"
 
 - name: Write empty Docker config to bypass macOS keychain helper
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.copy:
     dest: "{{ idea_docker_config_dir }}/config.json"
     content: |
@@ -103,21 +103,21 @@
     mode: "0600"
 
 - name: Sync frontend source to target build workspace
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../../frontend/"
     dest: "{{ idea_build_workspace }}/frontend/"
     mode: preserve
 
 - name: Sync backend source to target build workspace
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../../backend/"
     dest: "{{ idea_build_workspace }}/backend/"
     mode: preserve
 
 - name: Build platform frontend image from repo source
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - docker
@@ -130,7 +130,7 @@
     DOCKER_CONFIG: "{{ idea_docker_config_dir }}"
 
 - name: Build platform backend image from repo source
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - docker
@@ -143,7 +143,7 @@
     DOCKER_CONFIG: "{{ idea_docker_config_dir }}"
 
 - name: Load platform frontend image into kind
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - kind
@@ -156,7 +156,7 @@
     PATH: "{{ platform_cli_path }}"
 
 - name: Load platform backend image into kind
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - kind
@@ -169,14 +169,14 @@
     PATH: "{{ platform_cli_path }}"
 
 - name: Render idea platform manifest
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.template:
     src: "{{ playbook_dir }}/templates/idea-platform-app.yaml.j2"
     dest: /tmp/idea-platform-app.yaml
     mode: "0644"
 
 - name: Apply idea platform manifest
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - kubectl
@@ -188,7 +188,7 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Restart backend deployment to pick up rebuilt image
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - kubectl
@@ -202,7 +202,7 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Restart frontend deployment to pick up rebuilt image
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - kubectl
@@ -216,7 +216,7 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Wait for frontend rollout
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - kubectl
@@ -232,7 +232,7 @@
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
 - name: Wait for backend rollout
-  become: "{{ ansible_system != 'Darwin' }}"
+  become: "{{ not platform_is_darwin }}"
   ansible.builtin.command:
     argv:
       - kubectl
