@@ -33,6 +33,107 @@ function stripAnsiSequences(text) {
   return String(text || '').replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
 }
 
+function ansiStyleForState(state) {
+  const style = {};
+
+  if (state.bold) {
+    style.fontWeight = 700;
+  }
+  if (state.color) {
+    style.color = state.color;
+  }
+
+  return style;
+}
+
+function parseAnsiSegments(text) {
+  const raw = String(text || '');
+  const pattern = /\u001b\[([0-9;]*)m/g;
+  const segments = [];
+  let lastIndex = 0;
+  let match;
+  const state = {
+    color: '',
+    bold: false
+  };
+
+  const colorMap = {
+    30: '#111827',
+    31: '#ef4444',
+    32: '#22c55e',
+    33: '#f59e0b',
+    34: '#3b82f6',
+    35: '#d946ef',
+    36: '#06b6d4',
+    37: '#e5e7eb',
+    90: '#6b7280',
+    91: '#f87171',
+    92: '#4ade80',
+    93: '#fbbf24',
+    94: '#60a5fa',
+    95: '#e879f9',
+    96: '#22d3ee',
+    97: '#f9fafb'
+  };
+
+  function pushText(endIndex) {
+    if (endIndex <= lastIndex) {
+      return;
+    }
+    const value = raw.slice(lastIndex, endIndex);
+    if (!value) {
+      return;
+    }
+    segments.push({
+      text: value,
+      style: ansiStyleForState(state)
+    });
+  }
+
+  function applyCode(code) {
+    if (code === 0) {
+      state.color = '';
+      state.bold = false;
+      return;
+    }
+    if (code === 1) {
+      state.bold = true;
+      return;
+    }
+    if (code === 22) {
+      state.bold = false;
+      return;
+    }
+    if (code === 39) {
+      state.color = '';
+      return;
+    }
+    if (Object.prototype.hasOwnProperty.call(colorMap, code)) {
+      state.color = colorMap[code];
+    }
+  }
+
+  while ((match = pattern.exec(raw)) !== null) {
+    pushText(match.index);
+    const codes = (match[1] || '0')
+      .split(';')
+      .map((value) => Number(value))
+      .filter((value) => !Number.isNaN(value));
+
+    if (codes.length === 0) {
+      applyCode(0);
+    } else {
+      codes.forEach(applyCode);
+    }
+
+    lastIndex = pattern.lastIndex;
+  }
+
+  pushText(raw.length);
+
+  return segments.length > 0 ? segments : [{ text: raw, style: {} }];
+}
+
 function deepMerge(base, override) {
   if (Array.isArray(base)) {
     return Array.isArray(override) ? [...override] : [...base];
@@ -141,11 +242,10 @@ function appendLogMessage(currentLogs, message) {
   if (!message) {
     return currentLogs;
   }
-  const normalizedMessage = stripAnsiSequences(message);
-  if (currentLogs[currentLogs.length - 1] === normalizedMessage) {
+  if (currentLogs[currentLogs.length - 1] === message) {
     return currentLogs;
   }
-  return [...currentLogs, normalizedMessage];
+  return [...currentLogs, message];
 }
 
 function pruneLegacyExampleSecrets(secretMap, envName) {
@@ -444,7 +544,7 @@ function buildEnvLogsFromState(state, activeEnv, activeMessage = '') {
   const nextLogs = defaultEnvLogs();
   ENVIRONMENTS.forEach((envName) => {
     const savedLogs = state?.provisioning?.last_results?.[envName]?.logs_tail;
-    nextLogs[envName] = Array.isArray(savedLogs) ? savedLogs.map((log) => stripAnsiSequences(log)) : [];
+    nextLogs[envName] = Array.isArray(savedLogs) ? [...savedLogs] : [];
   });
   if (activeMessage) {
     nextLogs[activeEnv] = appendLogMessage(nextLogs[activeEnv], activeMessage);
@@ -1527,7 +1627,12 @@ function App() {
               {currentLogs.length === 0 && <span style={{ color: '#444' }}>Waiting for project state signal...</span>}
               {currentLogs.map((log, index) => (
                 <div key={`${log}-${index}`}>
-                  <span style={{ color: '#555' }}>&gt;&gt;&gt;</span> {stripAnsiSequences(log)}
+                  <span style={{ color: '#555' }}>&gt;&gt;&gt;</span>{' '}
+                  {parseAnsiSegments(log).map((segment, segmentIndex) => (
+                    <span key={`${index}-${segmentIndex}`} style={segment.style}>
+                      {segment.text}
+                    </span>
+                  ))}
                 </div>
               ))}
               <div ref={logEndRef} />
