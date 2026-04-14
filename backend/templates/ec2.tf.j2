@@ -1,0 +1,14 @@
+resource "aws_instance" "app_server" {
+  ami           = "ami-084a56dceed3eb9bb" # 준수님의 전용 AMI ID
+  instance_type = "{{ instance_type }}"
+  subnet_id     = aws_subnet.public.id
+
+  # 기본적인 보안 그룹 연결 (필요 시 vpc.tf에서 정의)
+  # vpc_security_group_ids = [aws_security_group.allow_web.id]
+
+  tags = {
+    Name        = "{{ project_name }}-ec2-{{ env }}"
+    Environment = "{{ env }}"
+    Project     = "{{ project_name }}"
+  }
+}
