@@ -23,7 +23,57 @@
     PATH: "{{ platform_cli_path }}"
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
+- name: Configure Argo CD server for reverse proxy mode
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.shell: |
+    cat <<'EOF' | kubectl apply -f -
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: argocd-cmd-params-cm
+      namespace: argocd
+    data:
+      server.insecure: "true"
+    EOF
+  args:
+    executable: /bin/bash
+  changed_when: false
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
 - name: Wait for Argo CD server deployment
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - rollout
+      - status
+      - deployment/argocd-server
+      - -n
+      - argocd
+      - --timeout=300s
+  changed_when: false
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+- name: Restart Argo CD server after reverse proxy config
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - rollout
+      - restart
+      - deployment/argocd-server
+      - -n
+      - argocd
+  changed_when: false
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+- name: Wait for Argo CD server restart rollout
   become: "{{ ansible_system != 'Darwin' }}"
   ansible.builtin.command:
     argv:
