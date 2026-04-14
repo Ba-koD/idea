@@ -565,6 +565,7 @@ textarea {
 }
 
 .status-bar {
+  margin-top: auto;
   flex-shrink: 0;
   background: var(--card-bg);
   padding: 12px 20px;
