@@ -74,6 +74,83 @@
     PATH: "{{ platform_cli_path }}"
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
+- name: Reset platform app build workspace
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.file:
+    path: "{{ idea_build_workspace }}"
+    state: absent
+
+- name: Create platform app build workspace
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.file:
+    path: "{{ idea_build_workspace }}"
+    state: directory
+    mode: "0755"
+
+- name: Sync frontend source to target build workspace
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../frontend/"
+    dest: "{{ idea_build_workspace }}/frontend/"
+    mode: preserve
+
+- name: Sync backend source to target build workspace
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../backend/"
+    dest: "{{ idea_build_workspace }}/backend/"
+    mode: preserve
+
+- name: Build platform frontend image from repo source
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - docker
+      - build
+      - -t
+      - "{{ idea_frontend_image }}"
+      - "{{ idea_build_workspace }}/frontend"
+  environment:
+    PATH: "{{ platform_cli_path }}"
+
+- name: Build platform backend image from repo source
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - docker
+      - build
+      - -t
+      - "{{ idea_backend_image }}"
+      - "{{ idea_build_workspace }}/backend"
+  environment:
+    PATH: "{{ platform_cli_path }}"
+
+- name: Load platform frontend image into kind
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - kind
+      - load
+      - docker-image
+      - "{{ idea_frontend_image }}"
+      - --name
+      - "{{ kind_cluster_name }}"
+  environment:
+    PATH: "{{ platform_cli_path }}"
+
+- name: Load platform backend image into kind
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - kind
+      - load
+      - docker-image
+      - "{{ idea_backend_image }}"
+      - --name
+      - "{{ kind_cluster_name }}"
+  environment:
+    PATH: "{{ platform_cli_path }}"
+
 - name: Render idea platform manifest
   become: "{{ ansible_system != 'Darwin' }}"
   ansible.builtin.template:
@@ -93,7 +170,7 @@
     PATH: "{{ platform_cli_path }}"
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
-- name: Restart backend deployment to reload ConfigMap-backed source
+- name: Restart backend deployment to pick up rebuilt image
   become: "{{ ansible_system != 'Darwin' }}"
   ansible.builtin.command:
     argv:
@@ -107,7 +184,7 @@
     PATH: "{{ platform_cli_path }}"
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
-- name: Restart frontend deployment to reload ConfigMap-backed assets
+- name: Restart frontend deployment to pick up rebuilt image
   become: "{{ ansible_system != 'Darwin' }}"
   ansible.builtin.command:
     argv:

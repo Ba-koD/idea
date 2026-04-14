@@ -5,7 +5,8 @@ from pydantic import BaseModel
 from typing import Optional, List
 import os
 import zipfile
-import shutil
+import socket
+from datetime import datetime, timezone
 import uvicorn
 
 # [중요] generator.py가 generate_all(req) 함수를 가지고 있어야 합니다.
@@ -41,6 +42,15 @@ class DeployRequest(BaseModel):
     backend_service: Optional[str] = "backend-svc"
     healthcheck_path: Optional[str] = "/healthz"
     cloudflare: Optional[CloudflareConfig] = None
+
+def runtime_payload(status: str = "ok"):
+    return {
+        "status": status,
+        "service": "idea-control-plane",
+        "environment": os.getenv("APP_ENV", "platform"),
+        "serverTime": datetime.now(timezone.utc).isoformat(),
+        "hostname": socket.gethostname(),
+    }
 
 # --- 핵심 배포 로직 ---
 
@@ -98,12 +108,24 @@ async def deploy_project(req: DeployRequest):
             "project_state": "reconciled",
             "message": f"{req.env_type.upper()} 환경 GitOps 리소스 반영 완료",
             "logs": execution_logs,
-            "download_url": f"http://localhost:8000/api/download/{req.project_name}/{req.env_type}"
+            "download_url": f"/api/download/{req.project_name}/{req.env_type}"
         }
 
     except Exception as e:
         print(f"❌ [SYSTEM ERROR] {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/healthz")
+async def healthz():
+    return runtime_payload()
+
+@app.get("/api/readyz")
+async def readyz():
+    return runtime_payload("ready")
+
+@app.get("/api/time")
+async def time():
+    return runtime_payload()
 
 # 3. 파일 다운로드 전용 API
 @app.get("/api/download/{project}/{env}")
@@ -126,6 +148,13 @@ async def switch_traffic(data: dict):
         "status": "success", 
         "active_slot": target,
         "message": f"Caddy 라우팅이 {target.upper()} 슬롯으로 전환되었습니다 (무중단 배포)."
+    }
+
+@app.get("/")
+async def root():
+    return {
+        **runtime_payload(),
+        "message": "Use /api/deploy, /api/download, /api/traffic/switch, or /api/healthz.",
     }
 
 if __name__ == "__main__":

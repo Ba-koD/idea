@@ -1,10 +1,12 @@
 import os
 import shutil
 import tempfile
+from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 
 # 템플릿 폴더 위치 설정
-env_loader = Environment(loader=FileSystemLoader("templates"))
+TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+env_loader = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)))
 
 def generate_all(data):
     """

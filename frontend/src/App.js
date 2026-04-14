@@ -2,6 +2,13 @@ import React, { useState, useEffect, useRef } from 'react';
 import './App.css';
 import MermaidViewer from './components/MermaidViewer';
 
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '/api';
+
+function buildApiUrl(path) {
+  const base = API_BASE_URL.replace(/\/$/, '');
+  return `${base}${path}`;
+}
+
 function App() {
   const [activeEnv, setActiveEnv] = useState('dev'); 
   const [prodActiveColor, setProdActiveColor] = useState('blue');
@@ -60,7 +67,7 @@ function App() {
     };
 
     try {
-      const response = await fetch('http://localhost:8000/api/deploy', {
+      const response = await fetch(buildApiUrl('/deploy'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -76,7 +83,7 @@ function App() {
         setLogs([`❌ Error: ${data.detail || "Reconciliation failed"}`]);
       }
     } catch (err) {
-      setLogs(["🚫 Error: Backend server unreachable (localhost:8000)"]);
+      setLogs([`🚫 Error: Backend server unreachable (${API_BASE_URL})`]);
       alert("🚫 백엔드 연결 실패!");
     }
   };
@@ -84,7 +91,7 @@ function App() {
   const handleTrafficSwitch = async (color) => {
     setProdActiveColor(color);
     try {
-      await fetch('http://localhost:8000/api/traffic/switch', {
+      await fetch(buildApiUrl('/traffic/switch'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ target_color: color })

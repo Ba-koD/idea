@@ -36,6 +36,9 @@ vault_namespace: vault
 
 idea_frontend_name: idea-frontend
 idea_backend_name: idea-backend
+idea_build_workspace: /tmp/idea-platform-build
+idea_frontend_image: idea-frontend:platform-local
+idea_backend_image: idea-backend:platform-local
 idea_frontend_replicas: 1
 idea_backend_replicas: 1
 idea_frontend_container_port: 80
