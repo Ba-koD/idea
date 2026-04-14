@@ -9,6 +9,71 @@
     PATH: "{{ platform_cli_path }}"
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
+- name: Remove legacy idea Argo CD application finalizers
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    if kubectl get application idea-platform -n argocd >/dev/null 2>&1; then
+      kubectl patch application idea-platform -n argocd --type merge -p '{"metadata":{"finalizers":[]}}'
+    fi
+  args:
+    executable: /bin/bash
+  changed_when: false
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+- name: Delete legacy idea Argo CD application
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - delete
+      - application
+      - idea-platform
+      - -n
+      - argocd
+      - --ignore-not-found=true
+  changed_when: false
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+- name: Wait for legacy idea Argo CD application removal
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    for _ in $(seq 1 30); do
+      if ! kubectl get application idea-platform -n argocd >/dev/null 2>&1; then
+        exit 0
+      fi
+      sleep 2
+    done
+    kubectl get application idea-platform -n argocd -o yaml || true
+    exit 1
+  args:
+    executable: /bin/bash
+  changed_when: false
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+- name: Delete legacy Argo CD repository credential
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - delete
+      - secret
+      - idea-gitops-repository
+      - -n
+      - argocd
+      - --ignore-not-found=true
+  changed_when: false
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
 - name: Render idea platform manifest
   become: "{{ ansible_system != 'Darwin' }}"
   ansible.builtin.template:
