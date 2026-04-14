@@ -9,71 +9,86 @@
     PATH: "{{ platform_cli_path }}"
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
-- name: Assert GitOps repository configuration
-  ansible.builtin.assert:
-    that:
-      - gitops_repo_url | length > 0
-      - gitops_repo_branch | length > 0
-      - gitops_repo_path | length > 0
-    fail_msg: "gitops_repo_url, gitops_repo_branch, and gitops_repo_path must be set for Argo CD app delivery."
-
-- name: Render Argo CD repository credential
-  become: "{{ ansible_system != 'Darwin' }}"
-  ansible.builtin.template:
-    src: "{{ playbook_dir }}/templates/argocd-repository.yaml.j2"
-    dest: /tmp/idea-argocd-repository.yaml
-    mode: "0600"
-  when: gitops_repo_token | length > 0
-
-- name: Apply Argo CD repository credential
-  become: "{{ ansible_system != 'Darwin' }}"
-  ansible.builtin.command:
-    argv:
-      - kubectl
-      - apply
-      - -f
-      - /tmp/idea-argocd-repository.yaml
-  when: gitops_repo_token | length > 0
-  environment:
-    PATH: "{{ platform_cli_path }}"
-    KUBECONFIG: "{{ platform_kubeconfig_path }}"
-
-- name: Render idea Argo CD Application
-  become: "{{ ansible_system != 'Darwin' }}"
-  ansible.builtin.template:
-    src: "{{ playbook_dir }}/templates/idea-argocd-application.yaml.j2"
-    dest: /tmp/idea-argocd-application.yaml
-    mode: "0644"
-
-- name: Apply idea Argo CD Application
-  become: "{{ ansible_system != 'Darwin' }}"
-  ansible.builtin.command:
-    argv:
-      - kubectl
-      - apply
-      - -f
-      - /tmp/idea-argocd-application.yaml
-  environment:
-    PATH: "{{ platform_cli_path }}"
-    KUBECONFIG: "{{ platform_kubeconfig_path }}"
-
-- name: Wait for idea Argo CD Application to become synced and healthy
+- name: Remove legacy idea Argo CD application finalizers
   become: "{{ ansible_system != 'Darwin' }}"
   ansible.builtin.shell: |
     set -euo pipefail
-    for _ in $(seq 1 60); do
-      sync_status="$(kubectl get application idea-platform -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || true)"
-      health_status="$(kubectl get application idea-platform -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null || true)"
-      if [ "${sync_status}" = "Synced" ] && [ "${health_status}" = "Healthy" ]; then
+    if kubectl get application idea-platform -n argocd >/dev/null 2>&1; then
+      kubectl patch application idea-platform -n argocd --type merge -p '{"metadata":{"finalizers":[]}}'
+    fi
+  args:
+    executable: /bin/bash
+  changed_when: false
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+- name: Delete legacy idea Argo CD application
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - delete
+      - application
+      - idea-platform
+      - -n
+      - argocd
+      - --ignore-not-found=true
+  changed_when: false
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+- name: Wait for legacy idea Argo CD application removal
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    for _ in $(seq 1 30); do
+      if ! kubectl get application idea-platform -n argocd >/dev/null 2>&1; then
         exit 0
       fi
-      sleep 5
+      sleep 2
     done
     kubectl get application idea-platform -n argocd -o yaml || true
     exit 1
   args:
     executable: /bin/bash
   changed_when: false
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+- name: Delete legacy Argo CD repository credential
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - delete
+      - secret
+      - idea-gitops-repository
+      - -n
+      - argocd
+      - --ignore-not-found=true
+  changed_when: false
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+- name: Render idea platform manifest
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/templates/idea-platform-app.yaml.j2"
+    dest: /tmp/idea-platform-app.yaml
+    mode: "0644"
+
+- name: Apply idea platform manifest
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - apply
+      - -f
+      - /tmp/idea-platform-app.yaml
   environment:
     PATH: "{{ platform_cli_path }}"
     KUBECONFIG: "{{ platform_kubeconfig_path }}"

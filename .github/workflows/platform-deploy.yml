@@ -107,29 +107,6 @@ jobs:
             "${target_user}@${target_host}" \
             'uname -s && id -un'
 
-      - name: Preflight GitOps repository access
-        env:
-          GITOPS_REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
-          GITOPS_REPO_USERNAME: ${{ vars.PLATFORM_GITOPS_REPO_USERNAME }}
-          GITOPS_REPO_TOKEN: ${{ secrets.PLATFORM_GITOPS_REPO_TOKEN }}
-          GITHUB_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
-        run: |
-          set -euo pipefail
-
-          gitops_repo_url="$(printf '%s' "${GITOPS_REPO_URL:-}" | tr -d '\r' | xargs)"
-          gitops_username="$(printf '%s' "${GITOPS_REPO_USERNAME:-x-access-token}" | tr -d '\r' | xargs)"
-          gitops_repo_token="$(printf '%s' "${GITOPS_REPO_TOKEN:-}" | tr -d '\r')"
-
-          if [ "${GITHUB_REPOSITORY_PRIVATE}" = "true" ]; then
-            if [ -z "${gitops_repo_token}" ]; then
-              echo "PLATFORM_GITOPS_REPO_TOKEN is required for a private GitOps repository."
-              exit 1
-            fi
-            git ls-remote "https://${gitops_username}:${gitops_repo_token}@${gitops_repo_url#https://}" HEAD >/dev/null
-          else
-            git ls-remote "$gitops_repo_url" HEAD >/dev/null
-          fi
-
       - name: Preflight Cloudflare API access
         env:
           PLATFORM_ENABLE_CLOUDFLARED: ${{ vars.PLATFORM_ENABLE_CLOUDFLARED }}
@@ -258,15 +235,10 @@ jobs:
           PLATFORM_CLOUDFLARE_PUBLIC_SUBDOMAIN: ${{ vars.PLATFORM_CLOUDFLARE_PUBLIC_SUBDOMAIN }}
           PLATFORM_CLOUDFLARE_TUNNEL_NAME: ${{ vars.PLATFORM_CLOUDFLARE_TUNNEL_NAME }}
           PLATFORM_CLOUDFLARE_ADMIN_ALLOWED_IPS: ${{ vars.PLATFORM_CLOUDFLARE_ADMIN_ALLOWED_IPS }}
-          PLATFORM_GITOPS_REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
-          PLATFORM_GITOPS_REPO_BRANCH: ${{ github.ref_name }}
-          PLATFORM_GITOPS_REPO_PATH: ${{ vars.PLATFORM_GITOPS_REPO_PATH }}
-          PLATFORM_GITOPS_REPO_USERNAME: ${{ vars.PLATFORM_GITOPS_REPO_USERNAME }}
           PLATFORM_POSTGRESQL_PASSWORD: ${{ secrets.PLATFORM_POSTGRESQL_PASSWORD }}
           PLATFORM_VAULT_DEV_ROOT_TOKEN: ${{ secrets.PLATFORM_VAULT_DEV_ROOT_TOKEN }}
           PLATFORM_CLOUDFLARED_TUNNEL_TOKEN: ${{ secrets.PLATFORM_CLOUDFLARED_TUNNEL_TOKEN }}
           PLATFORM_CLOUDFLARE_API_TOKEN: ${{ secrets.PLATFORM_CLOUDFLARE_API_TOKEN }}
-          PLATFORM_GITOPS_REPO_TOKEN: ${{ secrets.PLATFORM_GITOPS_REPO_TOKEN }}
         run: |
           python3 - <<'PY'
           import json
@@ -353,17 +325,9 @@ jobs:
             "monitoring_namespace": get_env("PLATFORM_MONITORING_NAMESPACE", "monitoring"),
             "data_namespace": get_env("PLATFORM_DATA_NAMESPACE", "idea-data"),
             "vault_namespace": get_env("PLATFORM_VAULT_NAMESPACE", "vault"),
-            "gitops_repo_url": require_env("PLATFORM_GITOPS_REPO_URL"),
-            "gitops_repo_branch": get_env("PLATFORM_GITOPS_REPO_BRANCH", "main"),
-            "gitops_repo_path": get_env("PLATFORM_GITOPS_REPO_PATH", "gitops/idea-platform/workloads"),
-            "gitops_repo_username": get_env("PLATFORM_GITOPS_REPO_USERNAME", "x-access-token"),
             "postgresql_password": require_env("PLATFORM_POSTGRESQL_PASSWORD"),
             "vault_dev_root_token": require_env("PLATFORM_VAULT_DEV_ROOT_TOKEN"),
           }
-
-          gitops_repo_token = get_env("PLATFORM_GITOPS_REPO_TOKEN", "")
-          if gitops_repo_token:
-            tfvars["gitops_repo_token"] = gitops_repo_token
 
           if enable_cloudflare_reconciliation:
             if not enable_cloudflared:

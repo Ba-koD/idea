@@ -205,37 +205,6 @@ variable "vault_namespace" {
   default     = "vault"
 }
 
-variable "gitops_repo_url" {
-  description = "Git repository URL that Argo CD should watch for generated app manifests."
-  type        = string
-  default     = ""
-}
-
-variable "gitops_repo_branch" {
-  description = "Git branch that Argo CD should watch for generated app manifests."
-  type        = string
-  default     = "main"
-}
-
-variable "gitops_repo_path" {
-  description = "Repository path that contains the generated app manifests."
-  type        = string
-  default     = "gitops/idea-platform/workloads"
-}
-
-variable "gitops_repo_username" {
-  description = "Username used by Argo CD when accessing a private GitOps repository."
-  type        = string
-  default     = "x-access-token"
-}
-
-variable "gitops_repo_token" {
-  description = "Token used by Argo CD when accessing a private GitOps repository."
-  type        = string
-  default     = ""
-  sensitive   = true
-}
-
 variable "postgresql_password" {
   description = "Password for the internal PostgreSQL instance."
   type        = string

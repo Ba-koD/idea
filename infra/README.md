@@ -33,7 +33,6 @@ GitHub Actions 설정:
   - `PLATFORM_POSTGRESQL_PASSWORD`
   - `PLATFORM_VAULT_DEV_ROOT_TOKEN`
 - private GitOps repo access에서 추가 필수 repository secret
-  - `PLATFORM_GITOPS_REPO_TOKEN`
 - Cloudflare API 자동화 모드에서 추가 필수 repository secrets
   - `PLATFORM_CLOUDFLARE_API_TOKEN`
 - 수동 tunnel token 모드에서만 필요한 선택 repository secret
@@ -46,8 +45,6 @@ GitHub Actions 설정:
   - `PLATFORM_ENABLE_VAULT=true`
   - `PLATFORM_ENABLE_CLOUDFLARED=true`
   - `PLATFORM_ENABLE_CLOUDFLARE_RECONCILIATION=true`
-  - `PLATFORM_GITOPS_REPO_PATH=gitops/idea-platform/workloads`
-  - `PLATFORM_GITOPS_REPO_USERNAME=x-access-token`
   - `PLATFORM_CLOUDFLARE_ACCOUNT_ID=<account-id>`
   - `PLATFORM_CLOUDFLARE_ZONE_ID=<zone-id>`
   - `PLATFORM_CLOUDFLARE_PUBLIC_SUBDOMAIN=idea`
@@ -62,11 +59,9 @@ GitHub Actions 설정:
   - 배포 제어 대상 호스트. 현재 구조에서는 보통 `ssh.rnen.kr`
 - `PLATFORM_TARGET_USER`
   - 해당 호스트에 접속할 SSH 사용자. 현재 구조에서는 예: `rudgh`
-- `PLATFORM_GITOPS_REPO_TOKEN`
   - Argo CD가 GitOps repo를 읽기 위한 GitHub token
   - 현재 repo가 private이면 필수
   - 최소 권한은 대상 repo `Contents: Read`
-- `PLATFORM_GITOPS_REPO_PATH`
   - 현재 repo 안에서 Argo CD가 감시할 manifest 경로
 - `PLATFORM_CLOUDFLARE_ACCOUNT_ID`
   - Tunnel API에 쓰는 Cloudflare account ID

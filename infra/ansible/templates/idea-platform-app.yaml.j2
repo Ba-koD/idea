@@ -1,0 +1,434 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: idea-frontend-assets
+  namespace: {{ idea_namespace }}
+  labels:
+    app.kubernetes.io/instance: idea-platform
+data:
+  index.html: |
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>idea Platform</title>
+        <style>
+          :root {
+            color-scheme: light;
+            --bg: #f4f1eb;
+            --panel: #ffffff;
+            --line: #d8d0c4;
+            --ink: #181818;
+            --muted: #5f6368;
+            --accent: #0d6b65;
+          }
+
+          * {
+            box-sizing: border-box;
+          }
+
+          body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background:
+              radial-gradient(circle at top left, rgba(13, 107, 101, 0.12), transparent 28%),
+              linear-gradient(180deg, #faf7f1 0%, #f0e9de 100%);
+            color: var(--ink);
+          }
+
+          main {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 28px 18px 56px;
+          }
+
+          .hero {
+            display: grid;
+            gap: 10px;
+            margin-bottom: 20px;
+          }
+
+          .eyebrow {
+            width: fit-content;
+            border-radius: 999px;
+            padding: 6px 12px;
+            background: rgba(13, 107, 101, 0.12);
+            color: var(--accent);
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+          }
+
+          h1 {
+            margin: 0;
+            font-size: clamp(2.2rem, 6vw, 4.2rem);
+            line-height: 0.94;
+            letter-spacing: -0.05em;
+          }
+
+          .lede {
+            margin: 0;
+            color: var(--muted);
+            line-height: 1.5;
+          }
+
+          .grid {
+            display: grid;
+            gap: 14px;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            margin-top: 24px;
+          }
+
+          .card {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            padding: 18px;
+            box-shadow: 0 10px 30px rgba(23, 23, 23, 0.05);
+          }
+
+          .label {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--muted);
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+          }
+
+          .value {
+            margin-top: 8px;
+            font-size: 1.1rem;
+            font-weight: 700;
+            word-break: break-word;
+          }
+
+          .actions {
+            margin-top: 22px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+          }
+
+          button {
+            border: 0;
+            border-radius: 999px;
+            padding: 11px 16px;
+            font: inherit;
+            font-weight: 700;
+            cursor: pointer;
+            color: #ffffff;
+            background: var(--accent);
+          }
+
+          button.secondary {
+            color: var(--ink);
+            background: #e8e1d6;
+          }
+
+          .meta {
+            margin-top: 14px;
+            color: var(--muted);
+            font-size: 14px;
+          }
+        </style>
+      </head>
+      <body>
+        <main>
+          <section class="hero">
+            <div class="eyebrow">idea platform</div>
+            <h1>Provisioned directly by Terraform and Ansible.</h1>
+            <p class="lede">
+              This control plane is installed as platform infrastructure. Runtime app delivery belongs to the tmp layer and Argo CD.
+            </p>
+          </section>
+
+          <section class="grid">
+            <article class="card">
+              <div class="label">Status</div>
+              <div class="value" id="status">loading</div>
+            </article>
+            <article class="card">
+              <div class="label">Backend Host</div>
+              <div class="value" id="hostname">-</div>
+            </article>
+            <article class="card">
+              <div class="label">App Time</div>
+              <div class="value" id="time">-</div>
+            </article>
+            <article class="card">
+              <div class="label">Updated</div>
+              <div class="value" id="updated">-</div>
+            </article>
+          </section>
+
+          <div class="actions">
+            <button id="refresh" type="button">Refresh</button>
+            <button id="health" type="button" class="secondary">Check Health</button>
+          </div>
+
+          <div class="meta" id="message">
+            The frontend reads platform runtime status from {{ platform_caddy_backend_base_path }}/time.
+          </div>
+        </main>
+
+        <script>
+          const statusEl = document.getElementById("status");
+          const hostnameEl = document.getElementById("hostname");
+          const timeEl = document.getElementById("time");
+          const updatedEl = document.getElementById("updated");
+          const messageEl = document.getElementById("message");
+          const apiBase = "{{ platform_caddy_backend_base_path }}";
+
+          async function load(path) {
+            const response = await fetch(apiBase + path, {
+              headers: { Accept: "application/json" },
+              cache: "no-store"
+            });
+
+            if (!response.ok) {
+              throw new Error("backend returned " + response.status);
+            }
+
+            return response.json();
+          }
+
+          async function refresh() {
+            try {
+              const payload = await load("/time");
+              statusEl.textContent = payload.status || "ok";
+              hostnameEl.textContent = payload.hostname || "-";
+              timeEl.textContent = payload.serverTime || "-";
+              updatedEl.textContent = new Date().toLocaleString();
+              messageEl.textContent = "idea platform is managed directly by IaC. tmp will later own app delivery.";
+            } catch (error) {
+              statusEl.textContent = "error";
+              hostnameEl.textContent = "-";
+              timeEl.textContent = "-";
+              updatedEl.textContent = new Date().toLocaleString();
+              messageEl.textContent = error.message;
+            }
+          }
+
+          async function checkHealth() {
+            try {
+              const payload = await load("/healthz");
+              statusEl.textContent = payload.status || "ok";
+              hostnameEl.textContent = payload.hostname || "-";
+              updatedEl.textContent = new Date().toLocaleString();
+              messageEl.textContent = "healthz returned " + (payload.status || "ok");
+            } catch (error) {
+              messageEl.textContent = error.message;
+            }
+          }
+
+          document.getElementById("refresh").addEventListener("click", refresh);
+          document.getElementById("health").addEventListener("click", checkHealth);
+          refresh();
+        </script>
+      </body>
+    </html>
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ idea_frontend_name }}
+  namespace: {{ idea_namespace }}
+  labels:
+    app.kubernetes.io/instance: idea-platform
+spec:
+  replicas: {{ idea_frontend_replicas }}
+  selector:
+    matchLabels:
+      app: {{ idea_frontend_name }}
+  template:
+    metadata:
+      labels:
+        app: {{ idea_frontend_name }}
+        app.kubernetes.io/instance: idea-platform
+    spec:
+      containers:
+        - name: frontend
+          image: nginx:1.27-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: {{ idea_frontend_container_port }}
+              name: http
+          volumeMounts:
+            - name: frontend-assets
+              mountPath: /usr/share/nginx/html/index.html
+              subPath: index.html
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: frontend-assets
+          configMap:
+            name: idea-frontend-assets
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ idea_frontend_name }}
+  namespace: {{ idea_namespace }}
+  labels:
+    app.kubernetes.io/instance: idea-platform
+spec:
+  selector:
+    app: {{ idea_frontend_name }}
+  ports:
+    - name: http
+      port: {{ idea_frontend_service_port }}
+      targetPort: http
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: idea-backend-source
+  namespace: {{ idea_namespace }}
+  labels:
+    app.kubernetes.io/instance: idea-platform
+data:
+  server.js: |
+    const http = require("http");
+    const os = require("os");
+
+    const port = Number(process.env.PORT || "8080");
+    const appEnv = process.env.APP_ENV || "platform";
+
+    function send(response, statusCode, payload) {
+      response.writeHead(statusCode, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+      response.end(JSON.stringify(payload));
+    }
+
+    function payload(status) {
+      return {
+        status,
+        service: "idea-backend",
+        environment: appEnv,
+        serverTime: new Date().toISOString(),
+        hostname: os.hostname(),
+      };
+    }
+
+    const server = http.createServer((request, response) => {
+      if (request.method !== "GET") {
+        send(response, 405, { error: "method not allowed" });
+        return;
+      }
+
+      if (request.url === "{{ platform_caddy_backend_base_path }}" || request.url === "{{ platform_caddy_backend_base_path }}/") {
+        send(response, 200, payload("ok"));
+        return;
+      }
+
+      if (request.url === "{{ platform_caddy_backend_base_path }}/time") {
+        send(response, 200, payload("ok"));
+        return;
+      }
+
+      if (request.url === "{{ platform_caddy_backend_base_path }}/healthz") {
+        send(response, 200, payload("ok"));
+        return;
+      }
+
+      if (request.url === "{{ platform_caddy_backend_base_path }}/readyz") {
+        send(response, 200, payload("ready"));
+        return;
+      }
+
+      send(response, 404, {
+        error: "not found",
+        path: request.url,
+        hostname: os.hostname(),
+      });
+    });
+
+    server.listen(port, "0.0.0.0", () => {
+      console.log("idea-backend listening on " + port);
+    });
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ idea_backend_name }}
+  namespace: {{ idea_namespace }}
+  labels:
+    app.kubernetes.io/instance: idea-platform
+spec:
+  replicas: {{ idea_backend_replicas }}
+  selector:
+    matchLabels:
+      app: {{ idea_backend_name }}
+  template:
+    metadata:
+      labels:
+        app: {{ idea_backend_name }}
+        app.kubernetes.io/instance: idea-platform
+    spec:
+      containers:
+        - name: backend
+          image: node:22-alpine
+          imagePullPolicy: IfNotPresent
+          command:
+            - node
+            - /app/server.js
+          env:
+            - name: PORT
+              value: "{{ idea_backend_container_port }}"
+            - name: APP_ENV
+              value: "platform"
+          ports:
+            - containerPort: {{ idea_backend_container_port }}
+              name: http
+          volumeMounts:
+            - name: backend-source
+              mountPath: /app/server.js
+              subPath: server.js
+          readinessProbe:
+            httpGet:
+              path: {{ platform_caddy_backend_base_path }}/readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: {{ platform_caddy_backend_base_path }}/healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: backend-source
+          configMap:
+            name: idea-backend-source
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ idea_backend_name }}
+  namespace: {{ idea_namespace }}
+  labels:
+    app.kubernetes.io/instance: idea-platform
+spec:
+  selector:
+    app: {{ idea_backend_name }}
+  ports:
+    - name: http
+      port: {{ idea_backend_service_port }}
+      targetPort: http
+  type: ClusterIP
