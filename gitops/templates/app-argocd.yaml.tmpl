@@ -1,0 +1,22 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: idea-app-__IDEA_NAMESPACE__
+  namespace: argocd
+spec:
+  project: default
+  source:
+    # 백엔드 API가 이 부분을 실제 GitHub Repo URL로 치환합니다.
+    repoURL: __GITOPS_REPO_URL__ 
+    targetRevision: HEAD
+    # 감시할 폴더 경로 (예: apps/test, apps/prod/blue 등)
+    path: __GITOPS_REPO_PATH__
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: __IDEA_NAMESPACE__
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

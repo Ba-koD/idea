@@ -1,3 +1,16 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: __IDEA_NAMESPACE__
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: idea-config
+  namespace: __IDEA_NAMESPACE__
+data:
+  __ENV_VARS__
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -69,6 +82,9 @@ spec:
           ports:
             - containerPort: 8080
               name: http
+          envFrom:
+            - configMapRef:
+                name: idea-config
           env:
             - name: HTTP_PORT
               value: "8080"
