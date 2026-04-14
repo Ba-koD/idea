@@ -19,6 +19,10 @@ on:
         required: false
         default: ""
 
+concurrency:
+  group: platform-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -30,6 +34,7 @@ jobs:
     env:
       PLATFORM_OPERATION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.operation || 'apply' }}
       PLATFORM_ANSIBLE_TAGS: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ansible_tags || '' }}
+      PLATFORM_TERRAFORM_VERSION: "1.14.4"
       ANSIBLE_CONFIG: ${{ github.workspace }}/infra/ansible/ansible.cfg
       ANSIBLE_HOST_KEY_CHECKING: "False"
       ANSIBLE_LOCAL_TEMP: /tmp/ansible-local
@@ -39,51 +44,54 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Bootstrap runner toolchain
         run: |
           set -euo pipefail
 
+          bootstrap_root="$HOME/.cache/idea-platform"
+          bootstrap_bin="$bootstrap_root/bootstrap/bin"
+          mkdir -p "$bootstrap_bin"
+
           {
             echo /opt/homebrew/bin
             echo /opt/homebrew/sbin
             echo /Applications/Docker.app/Contents/Resources/bin
-            echo "$RUNNER_TEMP/bootstrap/bin"
+            echo "$bootstrap_bin"
           } >> "$GITHUB_PATH"
 
-          export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/Applications/Docker.app/Contents/Resources/bin:$RUNNER_TEMP/bootstrap/bin:$PATH"
-          mkdir -p "$RUNNER_TEMP/bootstrap/bin"
+          export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/Applications/Docker.app/Contents/Resources/bin:$bootstrap_bin:$PATH"
 
           /opt/homebrew/bin/brew --version
 
-          TERRAFORM_VERSION="$(python3 - <<'PY'
-          import json
-          import urllib.request
-
-          with urllib.request.urlopen("https://checkpoint-api.hashicorp.com/v1/check/terraform") as response:
-              payload = json.load(response)
-          print(payload["current_version"])
-          PY
-          )"
-
-          curl -fsSL -o "$RUNNER_TEMP/terraform.zip" "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_darwin_arm64.zip"
-          unzip -oq "$RUNNER_TEMP/terraform.zip" -d "$RUNNER_TEMP/bootstrap/bin"
-          chmod +x "$RUNNER_TEMP/bootstrap/bin/terraform"
+          TERRAFORM_VERSION="${PLATFORM_TERRAFORM_VERSION}"
+          if [ ! -x "$bootstrap_bin/terraform" ] || ! "$bootstrap_bin/terraform" version | grep -q "Terraform v${TERRAFORM_VERSION}"; then
+            curl -fsSL -o "$RUNNER_TEMP/terraform.zip" "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_darwin_arm64.zip"
+            unzip -oq "$RUNNER_TEMP/terraform.zip" -d "$bootstrap_bin"
+            chmod +x "$bootstrap_bin/terraform"
+          fi
 
           python3 --version
-          "$RUNNER_TEMP/bootstrap/bin/terraform" version
+          "$bootstrap_bin/terraform" version
           docker version
 
       - name: Install Ansible
         run: |
           set -euo pipefail
 
-          export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/Applications/Docker.app/Contents/Resources/bin:$RUNNER_TEMP/bootstrap/bin:$PATH"
-          python3 -m venv "$RUNNER_TEMP/ansible-venv"
-          "$RUNNER_TEMP/ansible-venv/bin/python" -m pip install --upgrade pip
-          "$RUNNER_TEMP/ansible-venv/bin/python" -m pip install ansible-core
-          echo "$RUNNER_TEMP/ansible-venv/bin" >> "$GITHUB_PATH"
+          ansible_root="$HOME/.cache/idea-platform"
+          ansible_venv="$ansible_root/ansible-venv"
+          mkdir -p "$ansible_root"
+
+          if [ ! -x "$ansible_venv/bin/ansible-playbook" ]; then
+            python3 -m venv "$ansible_venv"
+            "$ansible_venv/bin/python" -m pip install --upgrade pip
+            "$ansible_venv/bin/python" -m pip install ansible-core
+          fi
+
+          echo "$ansible_venv/bin" >> "$GITHUB_PATH"
+          "$ansible_venv/bin/ansible-playbook" --version
 
       - name: Start SSH agent
         uses: webfactory/ssh-agent@v0.9.0
