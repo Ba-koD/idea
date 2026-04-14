@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from copy import deepcopy
 from typing import Any, Dict, List, Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
 ENVIRONMENTS: tuple[str, ...] = ("dev", "stage", "prod")
 SUPPORTED_NCLOUD_CLUSTER_VERSIONS: tuple[str, ...] = ("1.33.4", "1.34.3", "1.32.8")
 DEFAULT_NCLOUD_CLUSTER_VERSION = "1.33.4"
+DEFAULT_PLATFORM_TUNNEL_NAME = "idea-platform"
+DEFAULT_ARGOCD_SUBDOMAIN = "argo"
 
 
 def build_hostname(subdomain: str, base_domain: str) -> str:
@@ -21,6 +24,34 @@ def build_hostname(subdomain: str, base_domain: str) -> str:
         return normalized_base
 
     return f"{normalized_subdomain}.{normalized_base}"
+
+
+def preferred_base_domain(state: Dict[str, Any]) -> str:
+    environments = state.get("cloudflare", {}).get("environments", {})
+    for env_name in ("prod", "stage", "dev"):
+        base_domain = str(environments.get(env_name, {}).get("base_domain", "")).strip().lower()
+        if base_domain:
+            return base_domain
+    return ""
+
+
+def desired_argocd_access_hint(state: Dict[str, Any]) -> str:
+    base_domain = preferred_base_domain(state) or "rnen.kr"
+    return f"https://{DEFAULT_ARGOCD_SUBDOMAIN}.{base_domain}"
+
+
+def normalize_argocd_access_hint(raw_hint: Any, state: Dict[str, Any]) -> str:
+    hint = str(raw_hint or "").strip()
+    desired_hint = desired_argocd_access_hint(state)
+
+    if not hint:
+        return desired_hint
+
+    parsed = urlparse(hint if "://" in hint else f"https://{hint}")
+    if parsed.hostname:
+        return f"{parsed.scheme or 'https'}://{parsed.hostname}"
+
+    return desired_hint
 
 
 def default_targets() -> Dict[str, Dict[str, Any]]:
@@ -202,14 +233,14 @@ DEFAULT_PROJECT_STATE: Dict[str, Any] = {
         "gitops_repo_branch": "main",
         "gitops_repo_path": "gitops/apps",
         "gitops_repo_access_secret_ref": "gitops-repo-token",
-        "access_hint": "ssh MacMini && kubectl -n argocd port-forward svc/argocd-server 8081:80",
+        "access_hint": "https://argo.rnen.kr",
     },
     "cloudflare": {
         "enabled": True,
         "account_id": "2052eb94f7b555bd3bf9db83c1f4edbf",
         "zone_id": "aaafd11f9c6912ba37c1d52a69b78398",
         "api_token_secret_ref": "cloudflare-api-token",
-        "tunnel_name": "repo-example-platform",
+        "tunnel_name": DEFAULT_PLATFORM_TUNNEL_NAME,
         "route_mode": "platform_caddy",
         "environments": {
             "dev": {
@@ -272,12 +303,16 @@ def normalize_project_state(raw_state: Any) -> Dict[str, Any]:
     state = deep_merge(make_default_project_state(), incoming)
 
     cloudflare = state.setdefault("cloudflare", {})
+    argo = state.setdefault("argo", {})
     routing = state.setdefault("routing", {})
     delivery = state.setdefault("delivery", {})
     access = state.setdefault("access", {})
     legacy_base_domain = cloudflare.get("base_domain", "")
     legacy_prefix = cloudflare.get("public_subdomain_prefix", "")
     environments = cloudflare.setdefault("environments", {})
+
+    if not str(cloudflare.get("tunnel_name", "")).strip():
+        cloudflare["tunnel_name"] = DEFAULT_PLATFORM_TUNNEL_NAME
 
     for env_name in ENVIRONMENTS:
         env_cloudflare = environments.setdefault(env_name, {})
@@ -318,6 +353,7 @@ def normalize_project_state(raw_state: Any) -> Dict[str, Any]:
 
     delivery.setdefault("healthcheck_path", f"{routing.get('backend_base_path', '/api').rstrip('/')}/healthz")
     state.setdefault("provisioning", deepcopy(DEFAULT_PROJECT_STATE["provisioning"]))
+    argo["access_hint"] = normalize_argocd_access_hint(argo.get("access_hint", ""), state)
 
     return state
 
@@ -345,7 +381,7 @@ class ArgoConfig(BaseModel):
     gitops_repo_branch: str = "main"
     gitops_repo_path: str = "gitops/apps"
     gitops_repo_access_secret_ref: str = "gitops-repo-token"
-    access_hint: str = "ssh MacMini && kubectl -n argocd port-forward svc/argocd-server 8081:80"
+    access_hint: str = "https://argo.rnen.kr"
 
 
 class CloudflareEnvConfig(BaseModel):
@@ -358,7 +394,7 @@ class CloudflareConfig(BaseModel):
     account_id: str = "2052eb94f7b555bd3bf9db83c1f4edbf"
     zone_id: str = "aaafd11f9c6912ba37c1d52a69b78398"
     api_token_secret_ref: str = "cloudflare-api-token"
-    tunnel_name: str = "repo-example-platform"
+    tunnel_name: str = DEFAULT_PLATFORM_TUNNEL_NAME
     route_mode: str = "platform_caddy"
     environments: Dict[str, CloudflareEnvConfig] = Field(
         default_factory=lambda: {

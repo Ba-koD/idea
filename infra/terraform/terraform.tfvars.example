@@ -13,6 +13,7 @@ vault_dev_root_token       = "replace-me-vault-root"
 # cloudflare_account_id     = "replace-me"
 # cloudflare_zone_id        = "replace-me"
 # cloudflare_public_subdomain = "idea"
+# cloudflare_argocd_subdomain = "argo"
 # cloudflare_tunnel_name    = "idea-platform"
 # cloudflare_admin_allowed_ips = ["203.0.113.10/32"]
 # Set target_become = false for a macOS target such as a MacMini control host.

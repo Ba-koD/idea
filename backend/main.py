@@ -243,6 +243,8 @@ async def provision_target(req: ProvisionRequest):
                     ),
                 }
             )
+        if result.get("warnings"):
+            payload["warnings"] = result["warnings"]
 
         return payload
     except ValueError as exc:

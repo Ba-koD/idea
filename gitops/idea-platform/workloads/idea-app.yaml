@@ -788,14 +788,14 @@ data:
         gitops_repo_branch: "main",
         gitops_repo_path: "gitops/apps",
         gitops_repo_access_secret_ref: "gitops-repo-token",
-        access_hint: "ssh MacMini && kubectl -n argocd port-forward svc/argocd-server 8081:80",
+        access_hint: "https://argo.rnen.kr",
       },
       cloudflare: {
         enabled: true,
         account_id: "2052eb94f7b555bd3bf9db83c1f4edbf",
         zone_id: "aaafd11f9c6912ba37c1d52a69b78398",
         api_token_secret_ref: "cloudflare-api-token",
-        tunnel_name: "repo-example-platform",
+        tunnel_name: "idea-platform",
         route_mode: "platform_caddy",
         environments: {
           dev: {

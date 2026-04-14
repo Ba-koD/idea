@@ -3,9 +3,10 @@ import './App.css';
 import MermaidViewer from './components/MermaidViewer';
 
 const ENVIRONMENTS = ['dev', 'stage', 'prod'];
-const STORAGE_KEY = 'idea-project-state-v2';
+const STORAGE_KEY = 'idea-project-state-v3';
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '/api';
 const SUPPORTED_NCLOUD_CLUSTER_VERSIONS = ['1.33.4', '1.34.3', '1.32.8'];
+const DEFAULT_PLATFORM_TUNNEL_NAME = 'idea-platform';
 const ENVIRONMENT_META = {
   dev: { color: '#3b82f6', label: 'Development' },
   stage: { color: '#f59e0b', label: 'Staging' },
@@ -54,6 +55,36 @@ function buildHostname(subdomain, baseDomain) {
   }
 
   return `${normalizedSubdomain}.${normalizedBase}`;
+}
+
+function preferredBaseDomain(state) {
+  for (const envName of ['prod', 'stage', 'dev']) {
+    const baseDomain = (state?.cloudflare?.environments?.[envName]?.base_domain || '').trim().toLowerCase();
+    if (baseDomain) {
+      return baseDomain;
+    }
+  }
+  return '';
+}
+
+function desiredArgoAccessHint(state) {
+  return `https://argo.${preferredBaseDomain(state) || 'rnen.kr'}`;
+}
+
+function normalizeArgoAccessHint(rawHint, state) {
+  const hint = String(rawHint || '').trim();
+  const desired = desiredArgoAccessHint(state);
+
+  if (!hint) {
+    return desired;
+  }
+
+  try {
+    const url = new URL(hint.includes('://') ? hint : `https://${hint}`);
+    return `${url.protocol}//${url.hostname}`;
+  } catch (error) {
+    return desired;
+  }
 }
 
 function parseKeyValueBlock(text) {
@@ -123,14 +154,14 @@ function defaultProjectState() {
       gitops_repo_branch: 'main',
       gitops_repo_path: 'gitops/apps',
       gitops_repo_access_secret_ref: 'gitops-repo-token',
-      access_hint: 'ssh MacMini && kubectl -n argocd port-forward svc/argocd-server 8081:80'
+      access_hint: 'https://argo.rnen.kr'
     },
     cloudflare: {
       enabled: true,
       account_id: '2052eb94f7b555bd3bf9db83c1f4edbf',
       zone_id: 'aaafd11f9c6912ba37c1d52a69b78398',
       api_token_secret_ref: 'cloudflare-api-token',
-      tunnel_name: 'repo-example-platform',
+      tunnel_name: DEFAULT_PLATFORM_TUNNEL_NAME,
       route_mode: 'platform_caddy',
       environments: {
         dev: { subdomain: 'dev', base_domain: 'rnen.kr' },
@@ -303,6 +334,10 @@ function normalizeProjectState(rawState) {
   const legacyBaseDomain = merged.cloudflare.base_domain || '';
   const legacyPrefix = merged.cloudflare.public_subdomain_prefix || '';
 
+  if (!String(merged.cloudflare.tunnel_name || '').trim()) {
+    merged.cloudflare.tunnel_name = DEFAULT_PLATFORM_TUNNEL_NAME;
+  }
+
   ENVIRONMENTS.forEach((envName) => {
     const envCloudflare = merged.cloudflare.environments[envName] || {};
     const defaultEnvCloudflare = defaultProjectState().cloudflare.environments[envName];
@@ -341,6 +376,7 @@ function normalizeProjectState(rawState) {
 
   merged.delivery.healthcheck_path =
     merged.delivery.healthcheck_path || `${merged.routing.backend_base_path.replace(/\/$/, '')}/healthz`;
+  merged.argo.access_hint = normalizeArgoAccessHint(merged.argo.access_hint, merged);
 
   return merged;
 }
@@ -1105,6 +1141,8 @@ function App() {
               <pre>{[
                 `Supported Kubernetes versions: ${SUPPORTED_NCLOUD_CLUSTER_VERSIONS.join(', ')}`,
                 'login_key_name must match an existing Ncloud login key before provisioning runs.',
+                'Provisioning also tries to register the new cluster into the platform Argo CD automatically.',
+                'If Cloudflare control-plane values are present, provisioning also tries to reconcile argo.rnen.kr automatically.',
                 'If cluster_uuid / vpc_no / subnet_no stay as placeholders, Terraform creates new target resources.',
                 'If you want to reuse existing infra, replace those fields with real numeric ids or an existing cluster UUID.'
               ].join('\n')}</pre>
@@ -1124,7 +1162,7 @@ function App() {
                 />
               </div>
               <div className="form-group">
-                <label>Argo CD Access</label>
+                <label>Argo CD URL</label>
                 <input type="text" value={projectState.argo.access_hint} readOnly />
               </div>
             </div>

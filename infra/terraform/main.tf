@@ -19,6 +19,7 @@ locals {
     enable_cloudflared               = var.enable_cloudflared
     enable_cloudflare_reconciliation = var.enable_cloudflare_reconciliation
     cloudflare_public_subdomain      = var.cloudflare_public_subdomain
+    cloudflare_argocd_subdomain      = var.cloudflare_argocd_subdomain
     cloudflare_tunnel_name           = var.cloudflare_tunnel_name
     platform_caddy_backend_path      = var.platform_caddy_backend_base_path
     namespaces = {
@@ -57,6 +58,7 @@ locals {
     cloudflare_account_id            = var.cloudflare_account_id
     cloudflare_zone_id               = var.cloudflare_zone_id
     cloudflare_public_subdomain      = var.cloudflare_public_subdomain
+    cloudflare_argocd_subdomain      = var.cloudflare_argocd_subdomain
     cloudflare_tunnel_name           = var.cloudflare_tunnel_name
     cloudflare_admin_allowed_ips     = var.cloudflare_admin_allowed_ips
     platform_caddy_backend_base_path = var.platform_caddy_backend_base_path

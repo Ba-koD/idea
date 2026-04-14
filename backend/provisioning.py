@@ -3,15 +3,24 @@ from __future__ import annotations
 import json
 import os
 import re
+import ssl
 import subprocess
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
+from urllib.error import HTTPError
+from urllib.parse import quote, urlparse
+from urllib.request import Request, urlopen
 
 SUPPORTED_NCLOUD_CLUSTER_VERSIONS: tuple[str, ...] = ("1.33.4", "1.34.3", "1.32.8")
 DEFAULT_NCLOUD_CLUSTER_VERSION = "1.33.4"
+DEFAULT_PLATFORM_CADDY_SERVICE_URL = os.getenv(
+    "IDEA_PLATFORM_CADDY_SERVICE_URL",
+    "http://platform-caddy.edge-system.svc.cluster.local:80",
+)
+DEFAULT_CLOUDFLARE_API_BASE_URL = "https://api.cloudflare.com/client/v4"
 
 TERRAFORM_VERSIONS_TF = dedent(
     """
@@ -388,6 +397,447 @@ def render_argocd_cluster_secret(cluster_name: str, cluster_endpoint: str, kubec
     ).strip() + "\n" + "\n".join(f"            {line}" for line in json.dumps(config, indent=2).splitlines()) + "\n"
 
 
+def preferred_base_domain(project_state: dict[str, Any]) -> str:
+    environments = project_state.get("cloudflare", {}).get("environments", {})
+    for env_name in ("prod", "stage", "dev"):
+        base_domain = str(environments.get(env_name, {}).get("base_domain", "")).strip().lower()
+        if base_domain:
+            return base_domain
+    return ""
+
+
+def normalize_argocd_access_hint(project_state: dict[str, Any]) -> str:
+    base_domain = preferred_base_domain(project_state) or "rnen.kr"
+    desired_hint = f"https://argo.{base_domain}"
+    raw_hint = str(project_state.get("argo", {}).get("access_hint", "")).strip()
+
+    if not raw_hint:
+        return desired_hint
+
+    parsed = urlparse(raw_hint if "://" in raw_hint else f"https://{raw_hint}")
+    if parsed.hostname:
+        return f"{parsed.scheme or 'https'}://{parsed.hostname}"
+
+    return desired_hint
+
+
+def argocd_hostname(project_state: dict[str, Any]) -> str:
+    parsed = urlparse(normalize_argocd_access_hint(project_state))
+    return parsed.hostname or ""
+
+
+def http_json_request(
+    url: str,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    body: dict[str, Any] | None = None,
+    expected_statuses: tuple[int, ...] = (200,),
+    ssl_context: ssl.SSLContext | None = None,
+) -> dict[str, Any]:
+    payload = json.dumps(body).encode("utf-8") if body is not None else None
+    request_headers = {"Accept": "application/json", **(headers or {})}
+
+    if body is not None and "Content-Type" not in request_headers:
+        request_headers["Content-Type"] = "application/json"
+
+    request = Request(url, data=payload, headers=request_headers, method=method)
+
+    try:
+        with urlopen(request, context=ssl_context) as response:
+            raw_body = response.read()
+            status = response.status
+    except HTTPError as exc:
+        raw_body = exc.read()
+        status = exc.code
+        if status not in expected_statuses:
+            detail = raw_body.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(f"{method} {url} failed with {status}: {detail}") from exc
+
+    parsed_body: Any = None
+    if raw_body:
+        text = raw_body.decode("utf-8", errors="replace")
+        try:
+            parsed_body = json.loads(text)
+        except json.JSONDecodeError:
+            parsed_body = text
+
+    if status not in expected_statuses:
+        raise RuntimeError(f"{method} {url} returned unexpected status {status}.")
+
+    return {"status": status, "body": parsed_body}
+
+
+def load_incluster_platform_context() -> tuple[str, dict[str, str], ssl.SSLContext]:
+    token_path = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
+    ca_path = Path("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
+    host = os.getenv("KUBERNETES_SERVICE_HOST", "").strip()
+    port = os.getenv("KUBERNETES_SERVICE_PORT", "443").strip()
+
+    if not token_path.exists() or not host:
+        raise RuntimeError("Backend is not running with in-cluster Kubernetes credentials.")
+
+    ssl_context = ssl.create_default_context(cafile=str(ca_path)) if ca_path.exists() else ssl.create_default_context()
+    return (
+        f"https://{host}:{port}",
+        {"Authorization": f"Bearer {token_path.read_text(encoding='utf-8').strip()}"},
+        ssl_context,
+    )
+
+
+def kube_api_request(
+    path: str,
+    method: str = "GET",
+    body: dict[str, Any] | None = None,
+    expected_statuses: tuple[int, ...] = (200,),
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    api_server, api_headers, ssl_context = load_incluster_platform_context()
+    return http_json_request(
+        f"{api_server}{path}",
+        method=method,
+        headers={**api_headers, **(headers or {})},
+        body=body,
+        expected_statuses=expected_statuses,
+        ssl_context=ssl_context,
+    )
+
+
+def build_argocd_cluster_secret_manifest(
+    cluster_name: str,
+    cluster_endpoint: str,
+    kubeconfig: dict[str, str],
+    selected_env: str,
+) -> dict[str, Any]:
+    return {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+            "name": f"argocd-cluster-{selected_env}-{cluster_name}",
+            "namespace": "argocd",
+            "labels": {
+                "argocd.argoproj.io/secret-type": "cluster",
+                "app.kubernetes.io/managed-by": "idea-platform",
+            },
+        },
+        "type": "Opaque",
+        "stringData": {
+            "name": cluster_name,
+            "server": cluster_endpoint,
+            "config": json.dumps(
+                {
+                    "tlsClientConfig": {
+                        "insecure": False,
+                        "caData": kubeconfig["cluster_ca_certificate"],
+                        "certData": kubeconfig["client_certificate"],
+                        "keyData": kubeconfig["client_key"],
+                    }
+                },
+                indent=2,
+            ),
+        },
+    }
+
+
+def apply_argocd_cluster_secret_to_platform(
+    cluster_name: str,
+    cluster_endpoint: str,
+    kubeconfig: dict[str, str],
+    selected_env: str,
+) -> dict[str, Any]:
+    manifest = build_argocd_cluster_secret_manifest(cluster_name, cluster_endpoint, kubeconfig, selected_env)
+    secret_name = manifest["metadata"]["name"]
+    secret_path = f"/api/v1/namespaces/argocd/secrets/{quote(secret_name, safe='')}"
+    existing = kube_api_request(secret_path, expected_statuses=(200, 404))
+
+    if existing["status"] == 404:
+        kube_api_request(
+            "/api/v1/namespaces/argocd/secrets",
+            method="POST",
+            body=manifest,
+            expected_statuses=(201,),
+        )
+        action = "created"
+    else:
+        kube_api_request(
+            secret_path,
+            method="PATCH",
+            body=manifest,
+            expected_statuses=(200,),
+            headers={"Content-Type": "application/merge-patch+json"},
+        )
+        action = "updated"
+
+    return {
+        "applied": True,
+        "secret_name": secret_name,
+        "action": action,
+        "logs": [f"Argo CD cluster secret {secret_name} {action} in the platform cluster."],
+    }
+
+
+def cloudflare_api_request(
+    api_token: str,
+    path: str,
+    method: str = "GET",
+    body: dict[str, Any] | None = None,
+    expected_statuses: tuple[int, ...] = (200,),
+) -> dict[str, Any]:
+    response = http_json_request(
+        f"{DEFAULT_CLOUDFLARE_API_BASE_URL}{path}",
+        method=method,
+        headers={"Authorization": f"Bearer {api_token}"},
+        body=body,
+        expected_statuses=expected_statuses,
+    )
+    payload = response["body"]
+    if isinstance(payload, dict) and payload.get("success") is False:
+        errors = payload.get("errors") or []
+        error_text = "; ".join(str(item.get("message") or item) for item in errors) or "Cloudflare API request failed."
+        raise RuntimeError(error_text)
+    return response
+
+
+def upsert_cloudflare_dns_record(api_token: str, zone_id: str, hostname: str, tunnel_id: str) -> list[str]:
+    logs: list[str] = []
+    target = f"{tunnel_id}.cfargotunnel.com"
+    lookup = cloudflare_api_request(
+        api_token,
+        f"/zones/{zone_id}/dns_records?type=CNAME&name={quote(hostname, safe='')}",
+    )
+    existing_record = ((lookup["body"] or {}).get("result") or [{}])[0]
+
+    if not existing_record or not existing_record.get("id"):
+        cloudflare_api_request(
+            api_token,
+            f"/zones/{zone_id}/dns_records",
+            method="POST",
+            body={
+                "type": "CNAME",
+                "proxied": True,
+                "name": hostname,
+                "content": target,
+            },
+        )
+        logs.append(f"Created Cloudflare DNS record for {hostname}.")
+        return logs
+
+    if existing_record.get("content") != target or not bool(existing_record.get("proxied")):
+        cloudflare_api_request(
+            api_token,
+            f"/zones/{zone_id}/dns_records/{existing_record['id']}",
+            method="PUT",
+            body={
+                "type": "CNAME",
+                "proxied": True,
+                "name": hostname,
+                "content": target,
+            },
+        )
+        logs.append(f"Updated Cloudflare DNS record for {hostname}.")
+        return logs
+
+    logs.append(f"Cloudflare DNS record for {hostname} already matched the active tunnel.")
+    return logs
+
+
+def reconcile_cloudflare_waf_allowlist(api_token: str, zone_id: str, hostname: str, allowed_ips: list[str]) -> list[str]:
+    if not allowed_ips:
+        return ["Skipped Cloudflare WAF reconciliation because no admin allowlist IPs were configured."]
+
+    logs: list[str] = []
+    expression = f'(http.host eq "{hostname}") and not ip.src in {{ {" ".join(allowed_ips)} }}'
+    ref = "idea-platform-argocd-admin-allowlist"
+    description = "Managed by idea platform for Argo CD admin IP restriction"
+
+    entrypoint = cloudflare_api_request(
+        api_token,
+        f"/zones/{zone_id}/rulesets/phases/http_request_firewall_custom/entrypoint",
+        expected_statuses=(200, 404),
+    )
+
+    if entrypoint["status"] == 404:
+        cloudflare_api_request(
+            api_token,
+            f"/zones/{zone_id}/rulesets",
+            method="POST",
+            body={
+                "name": "Zone-level phase entry point",
+                "description": "Managed by idea platform for admin IP restriction",
+                "kind": "zone",
+                "phase": "http_request_firewall_custom",
+                "rules": [
+                    {
+                        "ref": ref,
+                        "description": description,
+                        "expression": expression,
+                        "action": "block",
+                        "enabled": True,
+                    }
+                ],
+            },
+        )
+        logs.append(f"Created Cloudflare WAF entrypoint with admin allowlist rule for {hostname}.")
+        return logs
+
+    result = (entrypoint["body"] or {}).get("result") or {}
+    ruleset_id = result.get("id", "")
+    existing_rule = next((rule for rule in result.get("rules", []) if rule.get("ref") == ref), None)
+
+    if not existing_rule:
+        cloudflare_api_request(
+            api_token,
+            f"/zones/{zone_id}/rulesets/{ruleset_id}/rules",
+            method="POST",
+            body={
+                "ref": ref,
+                "description": description,
+                "expression": expression,
+                "action": "block",
+                "enabled": True,
+            },
+        )
+        logs.append(f"Created Cloudflare WAF admin allowlist rule for {hostname}.")
+        return logs
+
+    needs_update = (
+        existing_rule.get("expression") != expression
+        or existing_rule.get("action") != "block"
+        or not bool(existing_rule.get("enabled", True))
+    )
+    if needs_update:
+        cloudflare_api_request(
+            api_token,
+            f"/zones/{zone_id}/rulesets/{ruleset_id}/rules/{existing_rule['id']}",
+            method="PATCH",
+            body={
+                "ref": ref,
+                "description": description,
+                "expression": expression,
+                "action": "block",
+                "enabled": True,
+            },
+        )
+        logs.append(f"Updated Cloudflare WAF admin allowlist rule for {hostname}.")
+        return logs
+
+    logs.append(f"Cloudflare WAF admin allowlist already matched {hostname}.")
+    return logs
+
+
+def reconcile_cloudflare_argocd_access(project_state: dict[str, Any]) -> dict[str, Any]:
+    cloudflare = project_state.get("cloudflare", {})
+    if not cloudflare.get("enabled", True):
+        return {"applied": False, "warnings": ["Skipped Cloudflare reconciliation because Cloudflare is disabled."], "logs": []}
+
+    api_token = resolve_secret_value(project_state, cloudflare.get("api_token_secret_ref", ""))
+    account_id = str(cloudflare.get("account_id", "")).strip()
+    zone_id = str(cloudflare.get("zone_id", "")).strip()
+    tunnel_name = str(cloudflare.get("tunnel_name", "")).strip()
+    hostname = argocd_hostname(project_state)
+
+    missing = []
+    if looks_like_placeholder(api_token):
+        missing.append("IDEA_CLOUDFLARE_API_TOKEN_VALUE")
+    if not account_id:
+        missing.append("IDEA_CLOUDFLARE_ACCOUNT_ID")
+    if not zone_id:
+        missing.append("IDEA_CLOUDFLARE_ZONE_ID")
+    if not tunnel_name:
+        missing.append("IDEA_CLOUDFLARE_TUNNEL_NAME")
+    if not hostname:
+        missing.append("IDEA_ARGO_ACCESS_HINT")
+    if missing:
+        return {
+            "applied": False,
+            "warnings": ["Skipped Cloudflare reconciliation because required values were missing: " + ", ".join(missing)],
+            "logs": [],
+        }
+
+    tunnels_response = cloudflare_api_request(api_token, f"/accounts/{account_id}/cfd_tunnel")
+    tunnel = next(
+        (item for item in (tunnels_response["body"] or {}).get("result", []) if item.get("name") == tunnel_name),
+        None,
+    )
+    if not tunnel:
+        return {
+            "applied": False,
+            "warnings": [
+                f"Skipped Cloudflare reconciliation because tunnel {tunnel_name!r} was not found. "
+                "Import a real IDEA_CLOUDFLARE_TUNNEL_NAME or keep the platform tunnel name."
+            ],
+            "logs": [],
+        }
+
+    tunnel_id = str(tunnel.get("id", "")).strip()
+    if not tunnel_id:
+        return {"applied": False, "warnings": [f"Tunnel {tunnel_name!r} did not return a tunnel id."], "logs": []}
+
+    config_response = cloudflare_api_request(
+        api_token,
+        f"/accounts/{account_id}/cfd_tunnel/{tunnel_id}/configurations",
+        expected_statuses=(200, 404),
+    )
+    result_payload = (config_response["body"] or {}).get("result") or {}
+    existing_config = result_payload.get("config") or result_payload or {}
+    existing_ingress = existing_config.get("ingress") or []
+    hostname_rules = [rule for rule in existing_ingress if isinstance(rule, dict) and rule.get("hostname")]
+    fallback_rule = next(
+        (rule for rule in existing_ingress if isinstance(rule, dict) and rule.get("service") and not rule.get("hostname")),
+        {"service": "http_status:404"},
+    )
+
+    updated_rules: list[dict[str, Any]] = []
+    hostname_present = False
+    for rule in hostname_rules:
+        if rule.get("hostname") == hostname:
+            hostname_present = True
+            updated_rules.append(
+                {
+                    "hostname": hostname,
+                    "service": DEFAULT_PLATFORM_CADDY_SERVICE_URL,
+                    "originRequest": rule.get("originRequest", {}),
+                }
+            )
+        else:
+            updated_rules.append(rule)
+
+    if not hostname_present:
+        updated_rules.append(
+            {
+                "hostname": hostname,
+                "service": DEFAULT_PLATFORM_CADDY_SERVICE_URL,
+                "originRequest": {},
+            }
+        )
+
+    updated_config = {key: value for key, value in existing_config.items() if key != "ingress"}
+    updated_config["ingress"] = updated_rules + [fallback_rule]
+    cloudflare_api_request(
+        api_token,
+        f"/accounts/{account_id}/cfd_tunnel/{tunnel_id}/configurations",
+        method="PUT",
+        body={"config": updated_config},
+    )
+
+    logs = [f"Cloudflare tunnel {tunnel_name} now routes {hostname} to {DEFAULT_PLATFORM_CADDY_SERVICE_URL}."]
+    logs.extend(upsert_cloudflare_dns_record(api_token, zone_id, hostname, tunnel_id))
+    logs.extend(
+        reconcile_cloudflare_waf_allowlist(
+            api_token,
+            zone_id,
+            hostname,
+            [item.strip() for item in project_state.get("access", {}).get("admin_allowed_source_ips", []) if str(item).strip()],
+        )
+    )
+    return {
+        "applied": True,
+        "warnings": [],
+        "logs": logs,
+        "hostname": hostname,
+        "tunnel_id": tunnel_id,
+    }
+
+
 def extract_terraform_output(raw_output: str) -> dict[str, Any]:
     payload = json.loads(raw_output)
     return {key: value.get("value") for key, value in payload.items()}
@@ -572,6 +1022,33 @@ def provision_ncloud_target(project_state: dict[str, Any], selected_env: str, ou
         encoding="utf-8",
     )
 
+    integration_logs: list[str] = []
+    integration_warnings: list[str] = []
+
+    try:
+        platform_argocd_result = apply_argocd_cluster_secret_to_platform(
+            tfvars["cluster_name"],
+            outputs["cluster_endpoint"],
+            kubeconfig,
+            selected_env,
+        )
+        integration_logs.extend(platform_argocd_result["logs"])
+    except Exception as exc:
+        integration_warnings.append(
+            "Automatic Argo CD cluster registration did not complete. "
+            f"Reason: {exc}"
+        )
+
+    try:
+        cloudflare_result = reconcile_cloudflare_argocd_access(state)
+        integration_logs.extend(cloudflare_result.get("logs", []))
+        integration_warnings.extend(cloudflare_result.get("warnings", []))
+    except Exception as exc:
+        integration_warnings.append(
+            "Automatic Cloudflare Argo CD routing did not complete. "
+            f"Reason: {exc}"
+        )
+
     next_ncloud = state["targets"][selected_env]["ncloud"]
     next_ncloud["cluster_uuid"] = outputs["cluster_uuid"]
     next_ncloud["cluster_endpoint"] = outputs["cluster_endpoint"]
@@ -582,6 +1059,7 @@ def provision_ncloud_target(project_state: dict[str, Any], selected_env: str, ou
     next_ncloud["login_key_name"] = tfvars["login_key_name"]
     state["argo"]["destination_name"] = ""
     state["argo"]["destination_server"] = outputs["cluster_endpoint"]
+    state["argo"]["access_hint"] = normalize_argocd_access_hint(state)
     state.setdefault("provisioning", {}).setdefault("last_results", {})[selected_env] = {
         "applied_at": datetime.now(timezone.utc).isoformat(),
         "runtime_dir": str(runtime_dir),
@@ -589,10 +1067,14 @@ def provision_ncloud_target(project_state: dict[str, Any], selected_env: str, ou
         "argocd_cluster_secret_path": str(argocd_cluster_secret_path),
         "cluster_uuid": outputs["cluster_uuid"],
         "cluster_endpoint": outputs["cluster_endpoint"],
+        "integration_logs": integration_logs,
+        "integration_warnings": integration_warnings,
     }
 
     logs.append(f"Wrote kubeconfig to {kubeconfig_path}.")
     logs.append(f"Wrote Argo CD cluster secret manifest to {argocd_cluster_secret_path}.")
+    logs.extend(integration_logs)
+    logs.extend(f"WARNING: {warning}" for warning in integration_warnings)
 
     return state, {
         "applied": True,
@@ -601,4 +1083,5 @@ def provision_ncloud_target(project_state: dict[str, Any], selected_env: str, ou
         "argocd_cluster_secret_path": str(argocd_cluster_secret_path),
         "logs": logs,
         "outputs": outputs,
+        "warnings": integration_warnings,
     }

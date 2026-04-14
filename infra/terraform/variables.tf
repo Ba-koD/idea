@@ -157,6 +157,12 @@ variable "cloudflare_public_subdomain" {
   default     = "idea"
 }
 
+variable "cloudflare_argocd_subdomain" {
+  description = "Public hostname prefix used for the Argo CD UI through Cloudflare Tunnel."
+  type        = string
+  default     = "argo"
+}
+
 variable "cloudflare_tunnel_name" {
   description = "Human-readable Cloudflare Tunnel name."
   type        = string

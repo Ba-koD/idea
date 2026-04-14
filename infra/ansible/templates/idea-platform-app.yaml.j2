@@ -37,6 +37,42 @@ spec:
             periodSeconds: 20
 ---
 apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ idea_backend_name }}-control-plane
+  namespace: {{ idea_namespace }}
+  labels:
+    app.kubernetes.io/instance: idea-platform
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ idea_backend_name }}-argocd-secret-writer
+  namespace: argocd
+  labels:
+    app.kubernetes.io/instance: idea-platform
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ idea_backend_name }}-argocd-secret-writer
+  namespace: argocd
+  labels:
+    app.kubernetes.io/instance: idea-platform
+subjects:
+  - kind: ServiceAccount
+    name: {{ idea_backend_name }}-control-plane
+    namespace: {{ idea_namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ idea_backend_name }}-argocd-secret-writer
+---
+apiVersion: v1
 kind: Service
 metadata:
   name: {{ idea_frontend_name }}
@@ -70,6 +106,7 @@ spec:
         app: {{ idea_backend_name }}
         app.kubernetes.io/instance: idea-platform
     spec:
+      serviceAccountName: {{ idea_backend_name }}-control-plane
       containers:
         - name: backend
           image: {{ idea_backend_image }}

@@ -8,13 +8,25 @@ data:
     :80 {
       encode gzip
 
+      @argocd host {{ cloudflare_argocd_subdomain }}.{{ idea_base_domain }}
+      handle @argocd {
+        reverse_proxy http://argocd-server.argocd.svc.cluster.local:80
+      }
+
+      @idea host {{ cloudflare_public_subdomain }}.{{ idea_base_domain }}
       @api path {{ platform_caddy_backend_base_path }}*
-      handle @api {
-        reverse_proxy http://{{ idea_backend_name }}.{{ idea_namespace }}.svc.cluster.local:{{ idea_backend_service_port }}
+      handle @idea {
+        handle @api {
+          reverse_proxy http://{{ idea_backend_name }}.{{ idea_namespace }}.svc.cluster.local:{{ idea_backend_service_port }}
+        }
+
+        handle {
+          reverse_proxy http://{{ idea_frontend_name }}.{{ idea_namespace }}.svc.cluster.local:{{ idea_frontend_service_port }}
+        }
       }
 
       handle {
-        reverse_proxy http://{{ idea_frontend_name }}.{{ idea_namespace }}.svc.cluster.local:{{ idea_frontend_service_port }}
+        respond "Not Found" 404
       }
     }
 ---

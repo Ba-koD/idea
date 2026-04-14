@@ -12,6 +12,7 @@
 - name: Derive Cloudflare routing values
   ansible.builtin.set_fact:
     cloudflare_idea_hostname: "{{ cloudflare_public_subdomain }}.{{ idea_base_domain }}"
+    cloudflare_argocd_hostname: "{{ cloudflare_argocd_subdomain }}.{{ idea_base_domain }}"
     cloudflare_tunnel_service_url: "http://{{ platform_caddy_name }}.{{ edge_namespace }}.svc.cluster.local:80"
     cloudflare_admin_allowed_ips_normalized: "{{ cloudflare_admin_allowed_ips | default([]) | map('trim') | reject('equalto', '') | list }}"
 
@@ -148,6 +149,9 @@
           - hostname: "{{ cloudflare_idea_hostname }}"
             service: "{{ cloudflare_tunnel_service_url }}"
             originRequest: {}
+          - hostname: "{{ cloudflare_argocd_hostname }}"
+            service: "{{ cloudflare_tunnel_service_url }}"
+            originRequest: {}
           - service: http_status:404
     return_content: true
     status_code: 200
@@ -223,9 +227,75 @@
   run_once: true
   no_log: true
 
+- name: Look up Cloudflare DNS record for Argo CD hostname
+  ansible.builtin.uri:
+    url: "{{ cloudflare_api_base_url }}/zones/{{ cloudflare_zone_id }}/dns_records?type=CNAME&name={{ cloudflare_argocd_hostname | urlencode }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ cloudflare_api_token }}"
+      Content-Type: application/json
+    return_content: true
+    status_code: 200
+  register: cloudflare_argocd_dns_lookup_response
+  when: enable_cloudflare_reconciliation
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+
+- name: Select Cloudflare DNS record for Argo CD hostname
+  ansible.builtin.set_fact:
+    cloudflare_existing_argocd_dns_record: "{{ (cloudflare_argocd_dns_lookup_response.json.result | first) | default({}) }}"
+  when: enable_cloudflare_reconciliation
+  no_log: true
+
+- name: Create Cloudflare DNS record for Argo CD hostname
+  ansible.builtin.uri:
+    url: "{{ cloudflare_api_base_url }}/zones/{{ cloudflare_zone_id }}/dns_records"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ cloudflare_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      type: CNAME
+      proxied: true
+      name: "{{ cloudflare_argocd_hostname }}"
+      content: "{{ cloudflare_tunnel_dns_target }}"
+    return_content: true
+    status_code: 200
+  when:
+    - enable_cloudflare_reconciliation
+    - cloudflare_existing_argocd_dns_record | length == 0
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+
+- name: Update Cloudflare DNS record for Argo CD hostname
+  ansible.builtin.uri:
+    url: "{{ cloudflare_api_base_url }}/zones/{{ cloudflare_zone_id }}/dns_records/{{ cloudflare_existing_argocd_dns_record.id }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ cloudflare_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      type: CNAME
+      proxied: true
+      name: "{{ cloudflare_argocd_hostname }}"
+      content: "{{ cloudflare_tunnel_dns_target }}"
+    return_content: true
+    status_code: 200
+  when:
+    - enable_cloudflare_reconciliation
+    - cloudflare_existing_argocd_dns_record | length > 0
+    - cloudflare_existing_argocd_dns_record.content != cloudflare_tunnel_dns_target or not (cloudflare_existing_argocd_dns_record.proxied | default(false))
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+
 - name: Build Cloudflare WAF allowlist expression
   ansible.builtin.set_fact:
-    cloudflare_admin_allowlist_expression: "http.host eq \"{{ cloudflare_idea_hostname }}\" and not ip.src in { {{ cloudflare_admin_allowed_ips_normalized | join(' ') }} }"
+    cloudflare_admin_allowlist_expression: "(http.host eq \"{{ cloudflare_idea_hostname }}\" or http.host eq \"{{ cloudflare_argocd_hostname }}\") and not ip.src in { {{ cloudflare_admin_allowed_ips_normalized | join(' ') }} }"
   when: enable_cloudflare_reconciliation
 
 - name: Get Cloudflare zone WAF entry point ruleset

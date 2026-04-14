@@ -16,6 +16,7 @@ cloudflare_api_token: ""
 cloudflare_account_id: ""
 cloudflare_zone_id: ""
 cloudflare_public_subdomain: idea
+cloudflare_argocd_subdomain: argo
 cloudflare_tunnel_name: idea-platform
 cloudflare_admin_allowed_ips: []
 platform_caddy_backend_base_path: /api

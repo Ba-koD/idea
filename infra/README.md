@@ -47,6 +47,7 @@ GitHub Actions 설정:
   - `PLATFORM_CLOUDFLARE_ACCOUNT_ID=<account-id>`
   - `PLATFORM_CLOUDFLARE_ZONE_ID=<zone-id>`
   - `PLATFORM_CLOUDFLARE_PUBLIC_SUBDOMAIN=idea`
+  - `PLATFORM_CLOUDFLARE_ARGOCD_SUBDOMAIN=argo`
   - `PLATFORM_CLOUDFLARE_TUNNEL_NAME=idea-platform`
   - `PLATFORM_CLOUDFLARE_ADMIN_ALLOWED_IPS=203.0.113.10/32`
 
@@ -63,7 +64,7 @@ GitHub Actions 설정:
 - `PLATFORM_CLOUDFLARE_ZONE_ID`
   - DNS/WAF에 쓰는 `rnen.kr` zone ID
 - `PLATFORM_CLOUDFLARE_ADMIN_ALLOWED_IPS`
-  - `idea.<base_domain>` 접근을 허용할 관리자 공인 IP/CIDR 목록
+  - `idea.<base_domain>` 와 `argo.<base_domain>` 접근을 허용할 관리자 공인 IP/CIDR 목록
 
 Cloudflare 모드 선택 규칙:
 
@@ -100,8 +101,10 @@ Cloudflare API token 권한:
 Cloudflare API 자동화 결과:
 
 - `idea.<PLATFORM_IDEA_BASE_DOMAIN>` hostname용 tunnel ingress 생성
+- `argo.<PLATFORM_IDEA_BASE_DOMAIN>` hostname용 tunnel ingress 생성
 - `idea.<PLATFORM_IDEA_BASE_DOMAIN> -> <tunnel-id>.cfargotunnel.com` CNAME 생성
-- `idea.<PLATFORM_IDEA_BASE_DOMAIN>`에 대해 `ADMIN_IP` 이외 요청을 block하는 WAF custom rule 생성
+- `argo.<PLATFORM_IDEA_BASE_DOMAIN> -> <tunnel-id>.cfargotunnel.com` CNAME 생성
+- `idea.<PLATFORM_IDEA_BASE_DOMAIN>`와 `argo.<PLATFORM_IDEA_BASE_DOMAIN>`에 대해 `ADMIN_IP` 이외 요청을 block하는 WAF custom rule 생성
 - Kubernetes `cloudflared` Deployment는 Cloudflare API에서 확보한 tunnel token으로 실행
 
 실제 배포:

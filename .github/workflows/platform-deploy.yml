@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - main
-    paths:
-      - .github/workflows/platform-deploy.yml
   workflow_dispatch:
     inputs:
       operation:
@@ -26,11 +24,12 @@ permissions:
 
 jobs:
   deploy:
-    if: github.event_name == 'workflow_dispatch'
     runs-on:
       - self-hosted
       - macOS
     env:
+      PLATFORM_OPERATION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.operation || 'apply' }}
+      PLATFORM_ANSIBLE_TAGS: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ansible_tags || '' }}
       ANSIBLE_CONFIG: ${{ github.workspace }}/infra/ansible/ansible.cfg
       ANSIBLE_HOST_KEY_CHECKING: "False"
       ANSIBLE_LOCAL_TEMP: /tmp/ansible-local
@@ -116,7 +115,7 @@ jobs:
             'uname -s && id -un'
 
       - name: Preflight Cloudflare API access
-        if: ${{ github.event.inputs.operation != 'destroy' }}
+        if: ${{ env.PLATFORM_OPERATION != 'destroy' }}
         env:
           PLATFORM_ENABLE_CLOUDFLARED: ${{ vars.PLATFORM_ENABLE_CLOUDFLARED }}
           PLATFORM_CLOUDFLARE_API_TOKEN: ${{ secrets.PLATFORM_CLOUDFLARE_API_TOKEN }}
@@ -371,21 +370,21 @@ jobs:
           terraform output -json ansible_extra_vars > ../ansible/generated/extra-vars.json
 
       - name: Run Ansible platform install
-        if: ${{ github.event.inputs.operation != 'destroy' }}
+        if: ${{ env.PLATFORM_OPERATION != 'destroy' }}
         working-directory: infra/ansible
         run: |
-          if [ -n "${{ github.event.inputs.ansible_tags }}" ]; then
-            ansible-playbook -i generated/inventory.ini site.yml --extra-vars @generated/extra-vars.json --tags "${{ github.event.inputs.ansible_tags }}"
+          if [ -n "${PLATFORM_ANSIBLE_TAGS}" ]; then
+            ansible-playbook -i generated/inventory.ini site.yml --extra-vars @generated/extra-vars.json --tags "${PLATFORM_ANSIBLE_TAGS}"
           else
             ansible-playbook -i generated/inventory.ini site.yml --extra-vars @generated/extra-vars.json
           fi
 
       - name: Run Ansible platform destroy
-        if: ${{ github.event.inputs.operation == 'destroy' }}
+        if: ${{ env.PLATFORM_OPERATION == 'destroy' }}
         working-directory: infra/ansible
         run: ansible-playbook -i generated/inventory.ini destroy.yml --extra-vars @generated/extra-vars.json
 
       - name: Terraform destroy contract state
-        if: ${{ github.event.inputs.operation == 'destroy' }}
+        if: ${{ env.PLATFORM_OPERATION == 'destroy' }}
         working-directory: infra/terraform
         run: terraform destroy -auto-approve -var-file=github.auto.tfvars.json

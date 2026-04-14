@@ -241,10 +241,11 @@
 - env별 allowlist state 저장
 - `POST /api/provision-target` Ncloud runtime provisioning
 - kubeconfig / Argo CD cluster secret artifact 생성
+- provisioning 후 platform Argo CD cluster secret 자동 적용 시도
+- provisioning 후 `argo.rnen.kr` Cloudflare tunnel/DNS/WAF 자동 reconcile 시도
 
 ### Not Implemented Yet
 
-- tmp에서 env별 Cloudflare API reconcile 실행
 - prod blue/green workload 두 벌 생성과 실제 무중단 전환
 
-즉 현재 구조는 `idea provisioning`과 `tmp provisioning input`의 경계는 정리됐고, import/export와 Ncloud runtime provisioning도 동작한다. 남은 큰 작업은 env별 Cloudflare runtime reconcile과 real blue/green rollout이다.
+즉 현재 구조는 `idea provisioning`과 `tmp provisioning input`의 경계는 정리됐고, import/export와 Ncloud runtime provisioning도 동작한다. 남은 큰 작업은 env별 app runtime Cloudflare reconcile과 real blue/green rollout이다.

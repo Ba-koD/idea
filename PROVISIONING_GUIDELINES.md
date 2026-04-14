@@ -143,6 +143,8 @@ Important:
 - `Project State -> GitOps bundle` 생성도 구현돼 있다.
 - `POST /api/provision-target` 경로로 Ncloud VPC/Subnet/NKS runtime provisioning 1차 경로도 구현돼 있다.
 - provisioning 결과로 `cluster_uuid`, subnet id, endpoint, kubeconfig, Argo CD cluster secret manifest가 나온다.
+- provisioning 성공 시 platform backend가 새 NKS cluster를 platform Argo CD에 자동 등록하려고 시도한다.
+- provisioning 성공 시 Cloudflare API token/account/zone/tunnel 값이 있으면 `argo.rnen.kr` tunnel/DNS/WAF reconcile도 자동으로 시도한다.
 - prod blue-green도 현재는 state/UI 플래그만 있고, 실제 manifest 2벌 생성은 아직 없다.
 
 ---
