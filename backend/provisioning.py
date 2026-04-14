@@ -337,7 +337,15 @@ def looks_like_resource_id(value: Any) -> bool:
 
 def looks_like_placeholder(value: Any) -> bool:
     text = str(value or "").strip().lower()
-    return not text or text.startswith("replace-me") or text in {"changeme", "change-me", "placeholder", "todo"}
+    return not text or text.startswith("replace-me") or text in {
+        "changeme",
+        "change-me",
+        "placeholder",
+        "todo",
+        "undefined",
+        "null",
+        "none",
+    }
 
 
 def normalize_resource_name(value: Any, fallback: str, max_length: int) -> str:
@@ -359,6 +367,19 @@ def normalize_node_server_spec_code(value: Any, selected_env: str) -> str:
     if text.upper().startswith("SVR."):
         return default
     return text
+
+
+def clear_stale_cluster_reference(state: dict[str, Any], selected_env: str) -> None:
+    ncloud = state["targets"][selected_env]["ncloud"]
+    ncloud["cluster_uuid"] = ""
+    ncloud["cluster_endpoint"] = ""
+    ncloud["node_pool_id"] = ""
+    state["argo"]["destination_server"] = "https://kubernetes.default.svc"
+
+
+def is_stale_existing_cluster_error(error_text: str) -> bool:
+    normalized = str(error_text or "")
+    return "data.ncloud_nks_cluster.existing[0]" in normalized and "Cluster is undefined" in normalized
 
 
 class ProvisioningPartialFailure(RuntimeError):
@@ -1589,31 +1610,48 @@ def provision_ncloud_target(
     emit("Running terraform apply.")
     apply_result = run_command([terraform_bin, "apply", "-auto-approve"], runtime_dir, command_env, log_callback=log_callback)
     if apply_result.returncode != 0:
-        partial_outputs = extract_partial_runtime_outputs(runtime_dir)
-        if partial_outputs.get("cluster_uuid"):
-            apply_partial_outputs_to_state(state, selected_env, partial_outputs)
-            write_runtime_artifacts_from_outputs(
-                runtime_dir,
-                tfvars["cluster_name"],
-                tfvars["login_key_name"],
-                selected_env,
-                partial_outputs,
-            )
+        apply_error_text = apply_result.stderr.strip() or apply_result.stdout.strip()
+        if tfvars["existing_cluster_uuid"] and is_stale_existing_cluster_error(apply_error_text):
             emit(
-                "Terraform apply failed after partial resource creation. "
-                f"Recovered cluster_uuid={partial_outputs.get('cluster_uuid')} for retry."
+                "The stored cluster_uuid points to a cluster that no longer exists. "
+                "Clearing the stale cluster reference and retrying terraform apply once."
             )
-            raise ProvisioningPartialFailure(
-                "terraform apply failed after partial resource creation. "
-                f"Recovered cluster_uuid={partial_outputs.get('cluster_uuid')} and saved it to project state. "
-                "Fix the node server spec and retry provisioning.",
-                next_state=state,
-                runtime_dir=str(runtime_dir),
-                logs=logs,
-                partial_outputs=partial_outputs,
-                warnings=["Partial Ncloud resources were created and saved to project state for retry."],
-            )
-        raise RuntimeError(f"terraform apply failed:\n{apply_result.stderr.strip() or apply_result.stdout.strip()}")
+            clear_stale_cluster_reference(state, selected_env)
+            tfvars = build_runtime_tfvars(state, selected_env)
+            write_runtime_terraform_files(runtime_dir, tfvars)
+            emit("Re-running terraform apply after clearing the stale cluster reference.")
+            apply_result = run_command([terraform_bin, "apply", "-auto-approve"], runtime_dir, command_env, log_callback=log_callback)
+            if apply_result.returncode == 0:
+                emit("terraform apply completed after clearing the stale cluster reference.")
+            else:
+                apply_error_text = apply_result.stderr.strip() or apply_result.stdout.strip()
+
+        if apply_result.returncode != 0:
+            partial_outputs = extract_partial_runtime_outputs(runtime_dir)
+            if partial_outputs.get("cluster_uuid"):
+                apply_partial_outputs_to_state(state, selected_env, partial_outputs)
+                write_runtime_artifacts_from_outputs(
+                    runtime_dir,
+                    tfvars["cluster_name"],
+                    tfvars["login_key_name"],
+                    selected_env,
+                    partial_outputs,
+                )
+                emit(
+                    "Terraform apply failed after partial resource creation. "
+                    f"Recovered cluster_uuid={partial_outputs.get('cluster_uuid')} for retry."
+                )
+                raise ProvisioningPartialFailure(
+                    "terraform apply failed after partial resource creation. "
+                    f"Recovered cluster_uuid={partial_outputs.get('cluster_uuid')} and saved it to project state. "
+                    "Fix the node server spec and retry provisioning.",
+                    next_state=state,
+                    runtime_dir=str(runtime_dir),
+                    logs=logs,
+                    partial_outputs=partial_outputs,
+                    warnings=["Partial Ncloud resources were created and saved to project state for retry."],
+                )
+            raise RuntimeError(f"terraform apply failed:\n{apply_error_text}")
     emit("terraform apply completed.")
 
     emit("Collecting terraform outputs.")
