@@ -373,6 +373,10 @@ def clear_stale_cluster_reference(state: dict[str, Any], selected_env: str) -> N
     ncloud = state["targets"][selected_env]["ncloud"]
     ncloud["cluster_uuid"] = ""
     ncloud["cluster_endpoint"] = ""
+    ncloud["vpc_no"] = ""
+    ncloud["subnet_no"] = ""
+    ncloud["lb_subnet_no"] = ""
+    ncloud["lb_public_subnet_no"] = ""
     ncloud["node_pool_id"] = ""
     state["argo"]["destination_server"] = "https://kubernetes.default.svc"
 
@@ -1469,7 +1473,10 @@ def import_existing_destroy_targets(
         )
         if result.returncode != 0:
             error_text = result.stderr.strip() or result.stdout.strip()
-            if "Cannot import non-existent remote object" in error_text:
+            if (
+                "Cannot import non-existent remote object" in error_text
+                or (resource_address == "ncloud_nks_cluster.cluster[0]" and "Cluster is undefined" in error_text)
+            ):
                 if log_callback is not None:
                     log_callback(
                         f"Skipping {resource_address} import because {resource_id} no longer exists remotely."
@@ -1491,6 +1498,7 @@ def clear_missing_import_targets(state: dict[str, Any], selected_env: str, impor
         elif resource_address == "ncloud_nks_cluster.cluster[0]":
             ncloud["cluster_uuid"] = ""
             ncloud["cluster_endpoint"] = ""
+            state["argo"]["destination_server"] = "https://kubernetes.default.svc"
         elif resource_address == "ncloud_vpc.managed[0]":
             ncloud["vpc_no"] = ""
         elif resource_address == "ncloud_subnet.node[0]":
