@@ -5,12 +5,16 @@ import MermaidViewer from './components/MermaidViewer';
 function App() {
   const [activeEnv, setActiveEnv] = useState('dev'); 
   const [prodActiveColor, setProdActiveColor] = useState('blue');
-  const [showToken, setShowToken] = useState(false); // 토큰 보이기/숨기기 상태
+  const [showToken, setShowToken] = useState(false);
+  
+  // 추가된 상태: 실시간 로그 및 다운로드 URL
+  const [logs, setLogs] = useState([]);
+  const [downloadUrl, setDownloadUrl] = useState(null);
 
   const [projectInfo, setProjectInfo] = useState({
     name: 'Infra-Forge-Project',
     repoUrl: 'https://github.com/yutju/sixsenste-iac', 
-    cfToken: '',     
+    cfToken: '',      
     cfZoneId: '',    
     cfTunnelId: '',  
     baseDomain: 'example.com' 
@@ -23,6 +27,10 @@ function App() {
   });
 
   const handleDeploy = async () => {
+    // 배포 시작 시 로그 초기화 및 로딩 메시지
+    setLogs([`Initiating deployment for ${activeEnv.toUpperCase()}...`]);
+    setDownloadUrl(null);
+
     const payload = {
       project_name: projectInfo.name,
       repo_url: projectInfo.repoUrl,
@@ -43,8 +51,19 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      if (response.ok) alert(`✅ ${activeEnv.toUpperCase()} 배포 및 Cloudflare 설정 완료!`);
+      
+      const data = await response.json();
+
+      if (response.ok) {
+        // 백엔드에서 받은 로그와 다운로드 URL 업데이트
+        setLogs(data.logs || ["Deployment completed successfully."]);
+        setDownloadUrl(data.download_url);
+        alert(`✅ ${activeEnv.toUpperCase()} 배포 완료!`);
+      } else {
+        setLogs([`❌ Error: ${data.detail || "Unknown error occurred"}`]);
+      }
     } catch (err) {
+      setLogs(["🚫 Error: Cannot connect to Backend server (localhost:8000)"]);
       alert("🚫 백엔드 연결 실패!");
     }
   };
@@ -181,10 +200,27 @@ function App() {
             DEPLOY TO {activeEnv.toUpperCase()}
           </button>
 
-          {/* 추가된 Health Check 섹션 */}
+          {/* 추가된 기능: 다운로드 버튼 (성공 시 노출) */}
+          {downloadUrl && (
+            <a href={downloadUrl} className="download-btn-link" style={{ 
+              display: 'block', 
+              marginTop: '10px', 
+              padding: '12px', 
+              backgroundColor: '#28a745', 
+              color: 'white', 
+              textAlign: 'center', 
+              textDecoration: 'none', 
+              borderRadius: '6px',
+              fontWeight: 'bold',
+              fontSize: '14px'
+            }}>
+              📦 DOWNLOAD IAC PACKAGE
+            </a>
+          )}
+
           <div className="sidebar-footer-status">
-             <div className="status-item"><span className="status-dot green"></span> Argo CD: Connected</div>
-             <div className="status-item"><span className="status-dot green"></span> CF Tunnel: Active</div>
+              <div className="status-item"><span className="status-dot green"></span> Argo CD: Connected</div>
+              <div className="status-item"><span className="status-dot green"></span> CF Tunnel: Active</div>
           </div>
         </aside>
 
@@ -195,6 +231,34 @@ function App() {
           </div>
           <div className="mermaid-wrapper">
             <MermaidViewer chartCode={getDiagramCode()} />
+          </div>
+
+          {/* 추가된 기능: 실시간 시스템 콘솔 */}
+          <div className="console-wrapper" style={{
+            marginTop: '20px',
+            backgroundColor: '#1e1e1e',
+            borderRadius: '8px',
+            border: '1px solid #333',
+            overflow: 'hidden'
+          }}>
+            <div style={{ backgroundColor: '#333', padding: '5px 15px', color: '#aaa', fontSize: '12px', fontFamily: 'monospace' }}>
+              SYSTEM_LOG_STREAM
+            </div>
+            <div className="console-content" style={{
+              height: '150px',
+              padding: '15px',
+              color: '#00ff00',
+              fontFamily: 'monospace',
+              fontSize: '13px',
+              overflowY: 'auto',
+              textAlign: 'left',
+              lineHeight: '1.6'
+            }}>
+              {logs.length === 0 && <span style={{color: '#555'}}>Waiting for deployment signal...</span>}
+              {logs.map((log, i) => (
+                <div key={i}><span style={{color: '#888'}}>>>></span> {log}</div>
+              ))}
+            </div>
           </div>
           
           <div className="status-bar">
