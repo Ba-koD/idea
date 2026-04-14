@@ -570,6 +570,14 @@ function getEnvProvisionState(state, envName) {
   return 'Not provisioned';
 }
 
+function getEnvGitOpsState(state, envName) {
+  const result = state?.provisioning?.last_results?.[envName] || {};
+  if (result.gitops_status === 'synced') {
+    return 'Synced';
+  }
+  return 'Not synced';
+}
+
 function App() {
   const [activeEnv, setActiveEnv] = useState('dev');
   const [prodActiveColor, setProdActiveColor] = useState('blue');
@@ -608,6 +616,7 @@ function App() {
   const envFileInputRef = useRef(null);
   const isProvisioningTarget = activeTargetOperation === 'apply';
   const isDestroyingTarget = activeTargetOperation === 'destroy';
+  const isSyncingGitOps = activeTargetOperation === 'gitops-sync';
   const isTargetOperationPending = Boolean(activeTargetOperation);
 
   useEffect(() => {
@@ -749,15 +758,24 @@ function App() {
 
     try {
       const saved = await persistProjectState();
-      const response = await fetch(buildApiUrl('/provision-target/start'), {
+      const endpoint = operation === 'gitops-sync' ? '/gitops-sync/start' : '/provision-target/start';
+      const requestBody =
+        operation === 'gitops-sync'
+          ? {
+              selected_env: activeEnv,
+              project_state: saved,
+              apply_argocd: true
+            }
+          : {
+              selected_env: activeEnv,
+              project_state: saved,
+              apply: true,
+              operation
+            };
+      const response = await fetch(buildApiUrl(endpoint), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          selected_env: activeEnv,
-          project_state: saved,
-          apply: true,
-          operation
-        })
+        body: JSON.stringify(requestBody)
       });
 
       const payload = await response.json();
@@ -792,17 +810,22 @@ function App() {
           setProjectState(nextState);
           setStateSource('backend');
           window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
-          setProvisionArtifactUrls((current) => ({
-            ...current,
-            [activeEnv]: operation === 'destroy'
-              ? { kubeconfig: '', argocd: '' }
-              : {
-                  kubeconfig: result.kubeconfig_download_url || '',
-                  argocd: result.argocd_cluster_secret_download_url || ''
-                }
-          }));
+          if (operation !== 'gitops-sync') {
+            setProvisionArtifactUrls((current) => ({
+              ...current,
+              [activeEnv]: operation === 'destroy'
+                ? { kubeconfig: '', argocd: '' }
+                : {
+                    kubeconfig: result.kubeconfig_download_url || '',
+                    argocd: result.argocd_cluster_secret_download_url || ''
+                  }
+            }));
+          }
           setStatusMessage(
-            result.message || `${activeEnv.toUpperCase()} target ${operation === 'destroy' ? 'destroyed' : 'provisioned'}.`
+            result.message ||
+              (operation === 'gitops-sync'
+                ? `${activeEnv.toUpperCase()} GitOps synced to Argo CD.`
+                : `${activeEnv.toUpperCase()} target ${operation === 'destroy' ? 'destroyed' : 'provisioned'}.`)
           );
           break;
         }
@@ -823,10 +846,12 @@ function App() {
         ...currentLogs,
         [activeEnv]: appendLogMessage(
           currentLogs[activeEnv] || [],
-          `${operation === 'destroy' ? 'Destroy' : 'Provisioning'} failed: ${error.message}`
+          `${operation === 'destroy' ? 'Destroy' : operation === 'gitops-sync' ? 'GitOps sync' : 'Provisioning'} failed: ${error.message}`
         )
       }));
-      setStatusMessage(`${operation === 'destroy' ? 'Destroy' : 'Provisioning'} failed: ${error.message}`);
+      setStatusMessage(
+        `${operation === 'destroy' ? 'Destroy' : operation === 'gitops-sync' ? 'GitOps sync' : 'Provisioning'} failed: ${error.message}`
+      );
     } finally {
       setActiveTargetOperation('');
     }
@@ -991,11 +1016,13 @@ function App() {
   const currentProvisionArtifacts = provisionArtifactUrls[activeEnv];
   const currentLogs = envLogs[activeEnv] || [];
   const currentProvisionState = getEnvProvisionState(projectState, activeEnv);
+  const currentGitOpsState = getEnvGitOpsState(projectState, activeEnv);
   const currentProvisionResult = projectState.provisioning?.last_results?.[activeEnv] || null;
   const canDestroyCurrentTarget =
     currentProvisionState === 'Provisioned' ||
     Boolean(String(currentTarget.ncloud.cluster_uuid || '').trim()) ||
     Boolean(String(currentTarget.ncloud.node_pool_id || '').trim());
+  const canSyncCurrentTarget = Boolean(String(currentTarget.ncloud.cluster_uuid || '').trim());
   const prodExampleBlock = [
     'APP_ENV=prod',
     'APP_DISPLAY_NAME=Repo Example Prod',
@@ -1594,6 +1621,14 @@ function App() {
             </button>
 
             <button
+              className="secondary-btn"
+              onClick={() => handleTargetOperation('gitops-sync')}
+              disabled={isSaving || isTargetOperationPending || isImportingEnv || isExportingEnv || !canSyncCurrentTarget}
+            >
+              {isSyncingGitOps ? `SYNCING ${activeEnv.toUpperCase()}...` : `SYNC ${activeEnv.toUpperCase()} TO ARGO`}
+            </button>
+
+            <button
               className="danger-btn"
               onClick={() => handleTargetOperation('destroy')}
               disabled={isSaving || isTargetOperationPending || isImportingEnv || isExportingEnv || !canDestroyCurrentTarget}
@@ -1693,8 +1728,16 @@ function App() {
               ● Provisioning: <strong>{currentProvisionState}</strong>
             </p>
             <p>
+              ● GitOps: <strong>{currentGitOpsState}</strong>
+            </p>
+            <p>
               ● Cluster: <strong>{currentTarget.ncloud.cluster_name}</strong>
             </p>
+            {currentProvisionResult?.gitops_application_name && (
+              <p>
+                ● Argo App: <strong>{currentProvisionResult.gitops_application_name}</strong>
+              </p>
+            )}
             {currentProvisionResult?.applied_at && (
               <p>
                 ● Last Applied: <strong>{new Date(currentProvisionResult.applied_at).toLocaleString()}</strong>

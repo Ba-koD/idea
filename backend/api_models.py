@@ -500,6 +500,12 @@ class DeployRequest(BaseModel):
     project_state: ProjectState
 
 
+class GitOpsSyncRequest(BaseModel):
+    selected_env: Literal["dev", "stage", "prod"]
+    project_state: ProjectState
+    apply_argocd: bool = True
+
+
 class EnvExchangeRequest(BaseModel):
     selected_env: Literal["dev", "stage", "prod"]
     project_state: ProjectState | None = None

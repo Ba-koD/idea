@@ -13,8 +13,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 import generator
-from api_models import DeployRequest, EnvExchangeRequest, ProjectState, ProvisionRequest, normalize_project_state
+from api_models import DeployRequest, EnvExchangeRequest, GitOpsSyncRequest, ProjectState, ProvisionRequest, normalize_project_state
 from env_import import apply_env_import, export_env_text, write_export_env_file
+from gitops_sync import sync_gitops_repo
 from provisioning import (
     ProvisioningPartialFailure,
     apply_argocd_admin_password,
@@ -280,6 +281,64 @@ async def deploy_project(req: DeployRequest):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@app.post("/api/gitops-sync/start")
+async def start_gitops_sync(req: GitOpsSyncRequest):
+    task = create_provision_task(req.selected_env, "gitops-sync")
+    payload = req.model_dump()
+
+    def run_task() -> None:
+        try:
+            update_provision_task(task["task_id"], status="running")
+            append_provision_log(task["task_id"], "Saving project state to backend.")
+            state = save_project_state(payload["project_state"])
+            append_provision_log(task["task_id"], "Project state saved. Starting GitOps sync pipeline.")
+            next_state, result = sync_gitops_repo(
+                state,
+                payload["selected_env"],
+                OUTPUT_ROOT,
+                log_callback=lambda message: append_provision_log(task["task_id"], message),
+                apply_argocd=payload.get("apply_argocd", True),
+            )
+            saved_state = save_project_state(next_state)
+            result_payload = {
+                "status": "success",
+                "selected_env": payload["selected_env"],
+                "operation": "gitops-sync",
+                "message": f"{payload['selected_env'].upper()} GitOps synced to Argo CD.",
+                "project_state": saved_state,
+                "logs": result["logs"],
+                "applied": result["applied"],
+                "gitops_repo_path": result.get("gitops_repo_path", ""),
+                "gitops_commit_sha": result.get("gitops_commit_sha", ""),
+                "gitops_application_name": result.get("gitops_application_name", ""),
+            }
+            if result.get("warnings"):
+                result_payload["warnings"] = result["warnings"]
+            update_provision_task(
+                task["task_id"],
+                status="completed",
+                result=result_payload,
+            )
+        except Exception as exc:
+            append_provision_log(task["task_id"], f"GitOps sync failed: {exc}")
+            update_provision_task(
+                task["task_id"],
+                status="failed",
+                error=str(exc),
+            )
+
+    threading.Thread(target=run_task, daemon=True).start()
+
+    return {
+        "status": "accepted",
+        "task_id": task["task_id"],
+        "selected_env": req.selected_env,
+        "operation": "gitops-sync",
+        "message": f"{req.selected_env.upper()} GitOps sync started.",
+        "logs": task["logs"],
+    }
+
+
 @app.post("/api/provision-target")
 async def provision_target(req: ProvisionRequest):
     try:
@@ -325,7 +384,7 @@ async def provision_target(req: ProvisionRequest):
                         f"/api/download-provision/{saved_state['project']['name']}/{selected_env}/argocd-cluster-secret"
                     ),
                     "logs": result["logs"],
-                    "message": f"{selected_env.upper()} Ncloud target provisioned and Argo CD inputs refreshed.",
+                    "message": f"{selected_env.upper()} Ncloud target provisioned. Run GitOps sync to publish manifests to Argo CD.",
                 }
             )
         if result.get("warnings"):
@@ -400,7 +459,7 @@ async def start_provision_target(req: ProvisionRequest):
                             f"/api/download-provision/{saved_state['project']['name']}/{payload['selected_env']}/argocd-cluster-secret"
                         ),
                         "logs": result["logs"],
-                        "message": f"{payload['selected_env'].upper()} Ncloud target provisioned and Argo CD inputs refreshed.",
+                        "message": f"{payload['selected_env'].upper()} Ncloud target provisioned. Run GitOps sync to publish manifests to Argo CD.",
                     }
                 )
             if result.get("warnings"):
