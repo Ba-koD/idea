@@ -34,7 +34,7 @@
 ```yaml
 project:
   name: repo-example
-  app_repo_url: https://github.com/Ba-koD/repo_example.git
+  app_repo_url: https://github.com/Ba-koD/repo_example
   git_ref: main
   repo_access_secret_ref: github-repo-example-token
 
@@ -53,16 +53,25 @@ argo:
   gitops_repo_branch: main
   gitops_repo_path: gitops/generated/repo-example
   gitops_repo_access_secret_ref: gitops-repo-token
+  access_hint: ssh MacMini && kubectl -n argocd port-forward svc/argocd-server 8081:80
 
 cloudflare:
   enabled: true
   account_id: 2052eb94f7b555bd3bf9db83c1f4edbf
   zone_id: aaafd11f9c6912ba37c1d52a69b78398
-  base_domain: rnen.kr
-  public_subdomain_prefix: repo-example
   api_token_secret_ref: cloudflare-api-token
   tunnel_name: repo-example-platform
   route_mode: platform_caddy
+  environments:
+    dev:
+      subdomain: repo-example-dev
+      base_domain: rnen.kr
+    stage:
+      subdomain: repo-example-stage
+      base_domain: rnen.kr
+    prod:
+      subdomain: repo-example
+      base_domain: rnen.kr
 
 targets:
   dev:
@@ -110,13 +119,17 @@ routing:
 env:
   dev:
     APP_ENV: dev
-    PUBLIC_API_BASE_PATH: /api
+    APP_DISPLAY_NAME: Repo Example Dev
+    PUBLIC_API_BASE_URL: /api
   stage:
     APP_ENV: stage
-    PUBLIC_API_BASE_PATH: /api
+    APP_DISPLAY_NAME: Repo Example Stage
+    PUBLIC_API_BASE_URL: /api
   prod:
     APP_ENV: prod
-    PUBLIC_API_BASE_PATH: /api
+    APP_DISPLAY_NAME: Repo Example Prod
+    PUBLIC_API_BASE_URL: /api
+    NODE_ENV: production
 
 secrets:
   dev:
@@ -133,6 +146,7 @@ access:
     - 58.123.221.76/32
   stage_allowed_source_ips:
     - 58.123.221.76/32
+  prod_allowed_source_ips: []
 
 delivery:
   prod_blue_green_enabled: true
@@ -151,6 +165,12 @@ delivery:
 - `project.app_repo_url`
 - `project.git_ref`
 - `project.repo_access_secret_ref`
+
+Important:
+
+- `project.app_repo_url`은 전역 입력이고 `dev / stage / prod`에 공통 적용한다.
+- 별도 `image_tag` 필드는 canonical `Project State`에 포함하지 않는다.
+- 배포용 image tag 또는 digest는 build 결과 또는 GitOps 산출물에서 결정한다.
 
 ### Build
 
@@ -177,11 +197,15 @@ delivery:
 - `cloudflare.enabled`
 - `cloudflare.account_id`
 - `cloudflare.zone_id`
-- `cloudflare.base_domain`
-- `cloudflare.public_subdomain_prefix`
 - `cloudflare.api_token_secret_ref`
 - `cloudflare.tunnel_name`
 - `cloudflare.route_mode`
+- `cloudflare.environments.dev.subdomain`
+- `cloudflare.environments.dev.base_domain`
+- `cloudflare.environments.stage.subdomain`
+- `cloudflare.environments.stage.base_domain`
+- `cloudflare.environments.prod.subdomain`
+- `cloudflare.environments.prod.base_domain`
 
 ### Deployment Targets
 
@@ -207,6 +231,11 @@ delivery:
 - `routing.backend_service_name`
 - `routing.backend_base_path`
 
+UI note:
+
+- env별 hostname preview는 Cloudflare의 `subdomain + base_domain` 조합으로 계산한다.
+- `subdomain`이 `@` 또는 `*`면 bare `base_domain`을 hostname으로 사용한다.
+
 ### Environment Variables
 
 - `env.dev`
@@ -224,6 +253,7 @@ delivery:
 - `access.admin_allowed_source_ips`
 - `access.dev_allowed_source_ips`
 - `access.stage_allowed_source_ips`
+- `access.prod_allowed_source_ips`
 
 ### Delivery Policy
 
@@ -346,6 +376,13 @@ Ncloud 이외의 target도 허용한다.
 - `stage.<domain>/api -> platform Caddy -> backend`
 - `prod.<domain> -> cloudflared -> platform Caddy -> active prod slot`
 - `prod.<domain>/api -> platform Caddy -> active prod backend`
+
+Hostname derivation:
+
+- `cloudflare.environments.dev.subdomain + base_domain -> routing.dev_hostname`
+- `cloudflare.environments.stage.subdomain + base_domain -> routing.stage_hostname`
+- `cloudflare.environments.prod.subdomain + base_domain -> routing.prod_hostname`
+- `@` 또는 `*`는 bare domain을 의미한다.
 
 ### Important
 

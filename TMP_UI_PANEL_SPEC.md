@@ -48,6 +48,8 @@
 - private repo면 secret drawer에서 token을 등록한다
 - repo clone test 버튼을 둔다
 - 성공 시 frontend/backend path 자동 추론을 시도한다
+- `App Repository URL`은 전역 필드로 두고 `dev / stage / prod` 전체에 공통 적용한다
+- 별도 `image tag` 입력은 두지 않는다
 
 ---
 
@@ -151,12 +153,18 @@
 
 ### Fields
 
-- `routing.dev_hostname`
-- `routing.stage_hostname`
-- `routing.prod_hostname`
 - `routing.entry_service_name`
 - `routing.backend_service_name`
 - `routing.backend_base_path`
+
+### Hostname Preview Inputs
+
+- `cloudflare.environments.dev.subdomain`
+- `cloudflare.environments.dev.base_domain`
+- `cloudflare.environments.stage.subdomain`
+- `cloudflare.environments.stage.base_domain`
+- `cloudflare.environments.prod.subdomain`
+- `cloudflare.environments.prod.base_domain`
 
 ### Default
 
@@ -167,6 +175,8 @@
 
 - DB는 선택 대상에 보여주지 않는다
 - backend는 기본적으로 `/api`로만 외부 노출한다
+- env별 hostname은 Cloudflare `subdomain + base_domain` 조합으로 계산해 preview 한다
+- `subdomain`이 `@` 또는 `*`면 bare domain으로 처리한다
 
 ---
 
@@ -267,11 +277,15 @@ Cloudflare는 별도 패널이 아니라 `Routing + Access + Review/Apply`에서
 - `cloudflare.enabled`
 - `cloudflare.account_id`
 - `cloudflare.zone_id`
-- `cloudflare.base_domain`
-- `cloudflare.public_subdomain_prefix`
 - `cloudflare.api_token_secret_ref`
 - `cloudflare.tunnel_name`
 - `cloudflare.route_mode`
+- `cloudflare.environments.dev.subdomain`
+- `cloudflare.environments.dev.base_domain`
+- `cloudflare.environments.stage.subdomain`
+- `cloudflare.environments.stage.base_domain`
+- `cloudflare.environments.prod.subdomain`
+- `cloudflare.environments.prod.base_domain`
 
 ### On Apply
 

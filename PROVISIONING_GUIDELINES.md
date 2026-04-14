@@ -111,8 +111,13 @@ repo/
 - backend context / Dockerfile path
 - Argo CD destination
 - dev / stage / prod target
-- hostname / `/api` routing
+- env별 `subdomain + base_domain` 조합으로 계산한 hostname / `/api` routing
 - env / secret
+
+Important:
+
+- `App Repository URL`은 전역 입력이고 `dev / stage / prod` 전체에 공통 적용한다.
+- 별도 `image tag` UI 입력은 두지 않고, build 결과의 image tag/digest를 GitOps 산출물에 반영한다.
 
 ---
 
@@ -196,6 +201,8 @@ UI는 최소 아래 탭 또는 섹션을 가져야 한다.
 - Secrets
 - Access
 - Delivery
+
+Cloudflare 입력은 환경별 `subdomain`과 `base_domain`을 따로 받아야 하며, `subdomain`이 `@` 또는 `*`면 bare domain으로 해석한다.
 
 ### Secrets Tab
 

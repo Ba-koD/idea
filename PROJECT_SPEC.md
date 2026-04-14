@@ -3,7 +3,7 @@
 ## 1. Project Definition
 
 `idea`는 On-Prem 환경에 설치되는 컨트롤 플레인이다.  
-운영자는 웹 UI에서 실제 서비스 저장소를 등록하고, `test / stage / prod` 환경 배포를 통합 관리한다.  
+운영자는 웹 UI에서 실제 서비스 저장소를 등록하고, `dev / stage / prod` 환경 배포를 통합 관리한다.  
 배포 방식은 **GitOps 기반**이며, 실제 애플리케이션 배포는 **Argo CD가 담당**한다.
 
 ---
@@ -26,17 +26,17 @@
   - cloudflared 실행 기반
 
 ### B. 서비스 배포 및 운영 단계
-- 대상: 운영자가 등록한 실제 서비스(레포 B)를 `test / stage / prod`에 배포
+- 대상: 운영자가 등록한 실제 서비스(레포 B)를 `dev / stage / prod`에 배포
 - 사용 도구: `idea UI + tmp 배포 계층 + Argo CD`
 - 동작 방식:
-  - 운영자가 웹 UI에서 레포 B, 환경별 `.env`, Cloudflare 정보, `test/stage` 허용 IP, 관리자 허용 IP, 배포 대상을 입력
+  - 운영자가 웹 UI에서 레포 B, 환경별 `.env`, Cloudflare 정보, `dev/stage` 허용 IP, 관리자 허용 IP, 배포 대상을 입력
   - 모든 입력값은 export/import 가능한 단일 `Project State`로 저장된다
   - `idea` 내부의 `tmp 배포 계층`이 GitOps 리소스와 Cloudflare desired state를 생성한다
   - Argo CD가 해당 리소스를 Kubernetes에 반영
   - `idea`의 Cloudflare reconciler가 Cloudflare API로 Tunnel, hostname, IP List, WAF rule을 반영한다
   - 외부 진입은 환경별 hostname을 `platform Caddy`에 연결하고, 기본 웹 경로는 앱 entry service로, `/api`는 backend service로 라우팅한다
   - prod는 `Caddy` 기반 blue-green 배포를 사용
-  - 외부 공개는 `Cloudflare Tunnel`을 사용하되 `test/stage`는 허용 IP만 접근 가능하다
+  - 외부 공개는 `Cloudflare Tunnel`을 사용하되 `dev/stage`는 허용 IP만 접근 가능하다
 
 ---
 
@@ -93,7 +93,7 @@
 - prod에서는 blue/green active upstream 전환 지점 역할도 담당
 
 ### Runtime
-- `test / stage / prod` 환경에서 실제로 실행되는 컨테이너
+- `dev / stage / prod` 환경에서 실제로 실행되는 컨테이너
 - prod는 `blue / green` 슬롯을 함께 운용
 
 ---
@@ -104,7 +104,7 @@
 
 ### Rule 1. Terraform / Ansible
 - **idea 플랫폼 설치에만 사용**
-- 실제 서비스의 `test / stage / prod` 앱 배포에는 사용하지 않음
+- 실제 서비스의 `dev / stage / prod` 앱 배포에는 사용하지 않음
 
 ### Rule 2. Argo CD
 - **앱 배포를 담당하는 GitOps CD 컴포넌트**
@@ -135,10 +135,10 @@
 - Argo CD가 Cloudflare API를 직접 호출하는 구조로 설계하지 않는다
 - `idea`는 배포 흐름에서 Tunnel, hostname, IP List, WAF rule을 자동 생성/수정한다
 - 기본 흐름:
-  - `test -> cloudflared -> platform Caddy -> test entry service`, 단 `test_allowed_source_ips`만 접근 가능
+  - `dev -> cloudflared -> platform Caddy -> dev entry service`, 단 `dev_allowed_source_ips`만 접근 가능
   - `stage -> cloudflared -> platform Caddy -> stage entry service`, 단 `stage_allowed_source_ips`만 접근 가능
   - `prod -> cloudflared -> platform Caddy -> active blue/green app`, public 공개
-- `test/stage` allowlist가 비어 있으면 public 공개하지 않는다
+- `dev/stage` allowlist가 비어 있으면 public 공개하지 않는다
 
 ### Rule 5. Prod Zero-Downtime
 - prod는 단일 Deployment가 아님
@@ -197,21 +197,24 @@
   - `gitops_repo_path`
   - `gitops_repo_access_secret`
 - Cloudflare API / Tunnel 정보
-  - `base_domain`
-  - `cloudflare_account_id`
-  - `cloudflare_api_token`
-  - `tunnel_name` 또는 `tunnel_id`
-  - `test_hostname`
-  - `stage_hostname`
-  - `prod_hostname`
+  - `cloudflare.account_id`
+  - `cloudflare.zone_id`
+  - `cloudflare.api_token_secret_ref`
+  - `cloudflare.tunnel_name`
+  - `cloudflare.environments.dev.subdomain`
+  - `cloudflare.environments.dev.base_domain`
+  - `cloudflare.environments.stage.subdomain`
+  - `cloudflare.environments.stage.base_domain`
+  - `cloudflare.environments.prod.subdomain`
+  - `cloudflare.environments.prod.base_domain`
 - 외부 라우팅 정보
   - `entry_service_name`
   - `backend_service_name`
   - `backend_base_path` 기본값 `/api`
-- `test / stage / prod`용 `.env`
-- `test_allowed_source_ips`
+- `dev / stage / prod`용 `.env`
+- `dev_allowed_source_ips`
 - `stage_allowed_source_ips`
-- `admin_allowed_ips`
+- `admin_allowed_source_ips`
 - 배포 대상 서버 또는 클러스터 선택
   - 환경별 `dev / stage / prod` target profile
   - 기본 provider `ncloud`
@@ -264,7 +267,7 @@
 - 확정된 이미지 정보와 `Project State`를 기준으로 environment별 manifest를 생성한다
 - 생성된 산출물은 `GitOps Desired State` repository 또는 path에 기록된다
 
-- test:
+- dev:
   - frontend 또는 app entry Deployment / Service
   - backend Deployment / Service
   - 내부 DB Deployment 또는 StatefulSet / Service
@@ -273,7 +276,7 @@
   - 필요 시 migration / smoke test `Job`
   - `platform Caddy` 라우팅 설정
   - Tunnel hostname route
-  - `test_allowed_source_ips` 기반 IP List / WAF rule
+  - `dev_allowed_source_ips` 기반 IP List / WAF rule
 - stage:
   - frontend 또는 app entry Deployment / Service
   - backend Deployment / Service
@@ -293,7 +296,7 @@
   - `platform Caddy` 설정
   - public Tunnel hostname route
 - admin:
-  - `idea UI` / `Grafana`용 `admin_allowed_ips` 기반 IP List / WAF rule
+  - `idea UI` / `Grafana`용 `admin_allowed_source_ips` 기반 IP List / WAF rule
 
 ### Step 5. Argo CD 반영
 - Argo CD가 `GitOps Desired State` 변경을 감지
@@ -301,24 +304,24 @@
 - Kubernetes에 manifest 적용
 - readiness / health check를 기준으로 배포 상태를 갱신
 - 필요한 경우 `PostSync` smoke test `Job` 또는 hook 실행
-- test / stage / prod 컨테이너 실행
+- dev / stage / prod 컨테이너 실행
 - prod는 blue/green 슬롯 유지
 
 ### Step 6. Cloudflare API 반영 및 접근 제어
 - `idea` Cloudflare reconciler가 Cloudflare API / Tunnel 설정 반영
 - 외부 도메인 예시:
-  - `test.<base_domain>`
+  - `dev.<base_domain>`
   - `stage.<base_domain>`
   - `prod.<base_domain>`
-- `test`는 `test_allowed_source_ips`에서만 접근 가능
+- `dev`는 `dev_allowed_source_ips`에서만 접근 가능
 - `stage`는 `stage_allowed_source_ips`에서만 접근 가능
 - prod는 항상 Caddy를 경유
-- `idea UI`와 `Grafana`는 `admin_allowed_ips`에서만 접근 가능
+- `idea UI`와 `Grafana`는 `admin_allowed_source_ips`에서만 접근 가능
 
 ### Step 7. 모니터링
 idea의 Monitoring 화면에서 아래를 확인한다.
 
-- test 상태
+- dev 상태
 - stage 상태
 - prod active color
 - 최근 배포 결과
@@ -335,7 +338,7 @@ idea의 Monitoring 화면에서 아래를 확인한다.
 하지만 공개 방식은 환경별로 다르게 고정한다.
 
 예시:
-- `test.example.com -> platform Caddy -> test entry service`, 단 `test_allowed_source_ips`만 허용
+- `dev.example.com -> platform Caddy -> dev entry service`, 단 `dev_allowed_source_ips`만 허용
 - `stage.example.com -> platform Caddy -> stage entry service`, 단 `stage_allowed_source_ips`만 허용
 - `prod.example.com -> platform Caddy -> active prod slot`, public 공개
 
@@ -368,18 +371,18 @@ Cloudflare 설정은 수동 콘솔 작업이 아니라 `idea`의 reconciliation 
 - WAF Custom Rule 적용
   - `ip.src not in $allowed_admin_ips` 이면 Block
 
-### 6.4 Test/Stage Restricted Access Policy
-`test`와 `stage`는 public-open 환경이 아니다.
+### 6.4 Dev/Stage Restricted Access Policy
+`dev`와 `stage`는 public-open 환경이 아니다.
 
 - 웹 UI에서 환경별 허용 IP 목록을 받는다
-- `test_allowed_source_ips`, `stage_allowed_source_ips`를 별도 저장한다
+- `dev_allowed_source_ips`, `stage_allowed_source_ips`를 별도 저장한다
 - Cloudflare API로 환경별 IP List와 WAF rule을 자동 생성한다
 - 허용된 IP에서만 접근 가능하다
 - allowlist가 비어 있으면 route를 비활성화하거나 deny-all로 유지한다
 
 ### 6.5 Separation Principle
 - `prod` 앱은 공개 대상
-- `test / stage` 앱은 제한 공개 대상
+- `dev / stage` 앱은 제한 공개 대상
 - `idea UI / Grafana`는 운영자 전용
 - 따라서 세 정책을 절대 동일하게 취급하지 않음
 
@@ -444,9 +447,9 @@ export와 import는 이 `Project State`를 기준으로 동작한다.
 - 환경별 target profile
 - `namespace`
 - `service_port`
-- `test_allowed_source_ips`
+- `dev_allowed_source_ips`
 - `stage_allowed_source_ips`
-- `admin_allowed_ips`
+- `admin_allowed_source_ips`
 - prod blue-green 정책
   - `prod_blue_green_enabled`
   - `healthcheck_path`
@@ -523,8 +526,8 @@ export와 import는 이 `Project State`를 기준으로 동작한다.
 - Cloudflare API / Tunnel 정보 입력
 - 환경별 hostname과 entry service 매핑 입력
 - backend service 이름과 backend path 입력
-- `test / stage / prod` `.env` 입력
-- `test / stage` 허용 IP 입력
+- `dev / stage / prod` `.env` 입력
+- `dev / stage` 허용 IP 입력
 - `idea UI / Grafana`용 admin 허용 IP 입력
 - 배포 대상 선택
 - prod blue-green 옵션 설정
@@ -547,8 +550,8 @@ export와 import는 이 `Project State`를 기준으로 동작한다.
 
 ### 10.5 Cloudflare API 기반 접근 제어
 - 환경별 Tunnel 연결
-- `test / stage` hostname 자동 연결
-- `test / stage` IP List / WAF rule 자동 생성
+- `dev / stage` hostname 자동 연결
+- `dev / stage` IP List / WAF rule 자동 생성
 - `idea UI / Grafana`는 admin IP만 허용
 - Cloudflare edge 설정은 수동이 아니라 reconciliation으로 유지
 - Cloudflare Tunnel의 내부 목적지는 환경별 entry service가 아니라 platform Caddy를 기본값으로 한다
@@ -560,7 +563,7 @@ export와 import는 이 `Project State`를 기준으로 동작한다.
 - rollback 지원
 
 ### 10.7 Monitoring
-- test / stage / prod 상태 확인
+- dev / stage / prod 상태 확인
 - 현재 active prod color 확인
 - 로그 및 health 상태 표시
 
@@ -576,8 +579,8 @@ export와 import는 이 `Project State`를 기준으로 동작한다.
 
 아래는 구현하면 안 된다.
 
-- `test / stage / prod` 앱 배포에 Terraform 사용
-- `test / stage / prod` 앱 배포에 Ansible 사용
+- `dev / stage / prod` 앱 배포에 Terraform 사용
+- `dev / stage / prod` 앱 배포에 Ansible 사용
 - Argo CD가 레포 B 소스코드를 직접 빌드
 - Argo CD를 임의 shell 실행기처럼 사용
 - 레포 B의 `docker-compose.yml`을 서버에서 직접 실행
@@ -585,7 +588,7 @@ export와 import는 이 `Project State`를 기준으로 동작한다.
 - prod DNS를 blue/green 각각에 직접 붙여서 스위칭
 - `idea` 웹뷰를 unrestricted public으로 노출
 - `Grafana`를 unrestricted public으로 노출
-- `test / stage`를 unrestricted public으로 노출
+- `dev / stage`를 unrestricted public으로 노출
 - DB를 public hostname 또는 Cloudflare Tunnel에 직접 연결
 - GitHub Secrets를 런타임 secret store처럼 사용
 - export/import 시 일부 웹 설정만 선택적으로 누락하는 구조
@@ -597,14 +600,14 @@ export와 import는 이 `Project State`를 기준으로 동작한다.
 AI에게 요청할 때는 아래 전제를 항상 유지한다.
 
 1. Terraform / Ansible은 **idea 설치용만 사용**
-2. `test / stage / prod` 앱 배포는 **Argo CD가 담당**
+2. `dev / stage / prod` 앱 배포는 **Argo CD가 담당**
 3. `tmp`는 **배포 오케스트레이션 계층**
 4. 레포 B는 **실제 배포 대상 서비스 저장소**
 5. `.env`는 **idea가 암호화 저장**
 6. 배포 시 `.env`는 **ConfigMap / Secret으로 변환**
 7. prod는 **Caddy 기반 blue-green**
 8. `prod`는 **Cloudflare Tunnel을 통해 public 공개**
-9. `test / stage`는 **Cloudflare Tunnel + 환경별 IP allowlist로 제한 공개**
+9. `dev / stage`는 **Cloudflare Tunnel + 환경별 IP allowlist로 제한 공개**
 10. `idea UI`와 `Grafana`는 **admin IP allowlist만 허용**
 11. Cloudflare 정책은 **IP List + WAF Custom Rule** 또는 동등한 allowlist 정책 사용
 12. 외부 라우팅은 **platform Caddy**가 기본 담당하고 backend는 **same-origin `/api`**로 연결
@@ -626,7 +629,7 @@ AI에게 요청할 때는 아래 전제를 항상 유지한다.
 `위 PROJECT_SPEC.md 기준으로 prod blue-green 전환 로직만 구체화해줘. Caddy를 active upstream 전환 지점으로 유지해.`
 
 ### Example 3
-`위 PROJECT_SPEC.md 기준으로 Argo CD가 반영할 test/stage/prod 리소스 구조를 설명해줘. Terraform/Ansible은 idea 설치용으로만 유지해.`
+`위 PROJECT_SPEC.md 기준으로 Argo CD가 반영할 dev/stage/prod 리소스 구조를 설명해줘. Terraform/Ansible은 idea 설치용으로만 유지해.`
 
 ### Example 4
 `위 PROJECT_SPEC.md 기준으로 Cloudflare Tunnel과 admin_ip allowlist 정책까지 포함한 운영 절차를 정리해줘.`
@@ -639,12 +642,12 @@ AI에게 요청할 때는 아래 전제를 항상 유지한다.
 
 - On-Prem에 설치되는 `idea` 플랫폼
 - 웹 UI 기반 통합 입력
-- 레포 B 기반 `test / stage / prod` 컨테이너 배포
+- 레포 B 기반 `dev / stage / prod` 컨테이너 배포
 - `.env` 암호화 저장
 - Argo CD 기반 GitOps 반영
 - platform Caddy 기반 hostname 및 `/api` 라우팅
 - prod의 Cloudflare Tunnel 기반 public 공개
-- test / stage의 Cloudflare IP allowlist 기반 제한 공개
+- dev / stage의 Cloudflare IP allowlist 기반 제한 공개
 - `idea UI / Grafana`는 admin IP만 허용
 - 웹 설정 전체 export / import 지원
 - prod의 Caddy 기반 blue-green 무중단 배포
@@ -654,4 +657,4 @@ AI에게 요청할 때는 아래 전제를 항상 유지한다.
 
 ## 15. One-Sentence Summary for AI
 
-`idea`는 On-Prem에 설치되는 GitOps 기반 애플리케이션 배포 컨트롤 플레인이고, 플랫폼 설치는 `GitHub Actions + Terraform + Ansible`, 실제 서비스 배포는 `tmp 배포 계층 + Argo CD`, 레포 B의 compose 정의는 입력 원본으로만 사용되며 외부 라우팅은 `platform Caddy`가 hostname과 same-origin `/api`를 담당하고, Cloudflare edge 설정은 `idea`가 API로 reconcile하며, `prod`는 public 공개, `test/stage`는 환경별 IP allowlist 제한 공개, 관리자 화면은 `admin IP allowlist`, 모든 웹 설정은 export/import 가능한 단일 `Project State`로 관리한다.
+`idea`는 On-Prem에 설치되는 GitOps 기반 애플리케이션 배포 컨트롤 플레인이고, 플랫폼 설치는 `GitHub Actions + Terraform + Ansible`, 실제 서비스 배포는 `tmp 배포 계층 + Argo CD`, 레포 B의 compose 정의는 입력 원본으로만 사용되며 외부 라우팅은 `platform Caddy`가 hostname과 same-origin `/api`를 담당하고, Cloudflare edge 설정은 `idea`가 API로 reconcile하며, `prod`는 public 공개, `dev/stage`는 환경별 IP allowlist 제한 공개, 관리자 화면은 `admin IP allowlist`, 모든 웹 설정은 export/import 가능한 단일 `Project State`로 관리한다.
