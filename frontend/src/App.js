@@ -1559,7 +1559,7 @@ function App() {
             </button>
 
             <button
-              className="secondary-btn"
+              className="success-btn"
               onClick={() => handleTargetOperation('apply')}
               disabled={isSaving || isTargetOperationPending || isImportingEnv || isExportingEnv}
             >

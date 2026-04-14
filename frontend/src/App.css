@@ -425,6 +425,7 @@ textarea {
 }
 
 .secondary-btn,
+.success-btn,
 .main-deploy-btn,
 .danger-btn {
   flex: 1;
@@ -442,11 +443,17 @@ textarea {
   background: #334155;
 }
 
+.success-btn,
+.main-deploy-btn {
+  background: #16a34a;
+}
+
 .danger-btn {
   background: #991b1b;
 }
 
 .secondary-btn:disabled,
+.success-btn:disabled,
 .main-deploy-btn:disabled,
 .danger-btn:disabled {
   opacity: 0.7;
@@ -454,6 +461,7 @@ textarea {
 }
 
 .secondary-btn:active,
+.success-btn:active,
 .main-deploy-btn:active,
 .danger-btn:active {
   transform: scale(0.98);

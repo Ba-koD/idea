@@ -13,6 +13,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 STATE_TABLE_NAME = "encrypted_project_state"
 STATE_RECORD_KEY = "active"
+TASK_TABLE_NAME = "encrypted_provision_tasks"
 
 
 def _derive_fernet_key(raw_value: str) -> bytes:
@@ -56,6 +57,15 @@ def _connect(db_path: Path) -> sqlite3.Connection:
         )
         """
     )
+    connection.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {TASK_TABLE_NAME} (
+          task_id TEXT PRIMARY KEY,
+          ciphertext BLOB NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+        """
+    )
     connection.commit()
     return connection
 
@@ -82,6 +92,38 @@ def _load_ciphertext(db_path: Path) -> bytes | None:
             (STATE_RECORD_KEY,),
         ).fetchone()
     return bytes(row[0]) if row else None
+
+
+def _save_task_ciphertext(db_path: Path, task_id: str, ciphertext: bytes) -> None:
+    updated_at = datetime.now(timezone.utc).isoformat()
+    with _connect(db_path) as connection:
+        connection.execute(
+            f"""
+            INSERT INTO {TASK_TABLE_NAME} (task_id, ciphertext, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(task_id)
+            DO UPDATE SET ciphertext = excluded.ciphertext, updated_at = excluded.updated_at
+            """,
+            (task_id, ciphertext, updated_at),
+        )
+        connection.commit()
+
+
+def _load_task_ciphertext(db_path: Path, task_id: str) -> bytes | None:
+    with _connect(db_path) as connection:
+        row = connection.execute(
+            f"SELECT ciphertext FROM {TASK_TABLE_NAME} WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+    return bytes(row[0]) if row else None
+
+
+def _load_all_task_ciphertexts(db_path: Path) -> list[tuple[str, bytes]]:
+    with _connect(db_path) as connection:
+        rows = connection.execute(
+            f"SELECT task_id, ciphertext FROM {TASK_TABLE_NAME}"
+        ).fetchall()
+    return [(str(row[0]), bytes(row[1])) for row in rows]
 
 
 def _encrypt_payload(fernet: Fernet, payload: dict[str, Any]) -> bytes:
@@ -142,3 +184,44 @@ def save_state(
     normalized = normalize_state(payload)
     _save_ciphertext(db_path, _encrypt_payload(fernet, normalized))
     return normalized
+
+
+def save_task(output_root: Path, task: dict[str, Any]) -> dict[str, Any]:
+    db_path = Path(os.getenv("IDEA_STATE_DB_PATH", output_root / "project-state.db"))
+    fernet = Fernet(_load_or_create_key(output_root))
+    normalized = json.loads(json.dumps(task))
+    task_id = str(normalized.get("task_id", "")).strip()
+    if not task_id:
+        raise ValueError("task_id is required to persist a provision task")
+    _save_task_ciphertext(db_path, task_id, _encrypt_payload(fernet, normalized))
+    return normalized
+
+
+def load_task(output_root: Path, task_id: str) -> dict[str, Any] | None:
+    db_path = Path(os.getenv("IDEA_STATE_DB_PATH", output_root / "project-state.db"))
+    fernet = Fernet(_load_or_create_key(output_root))
+    ciphertext = _load_task_ciphertext(db_path, task_id)
+    if ciphertext is None:
+        return None
+    return json.loads(json.dumps(_decrypt_payload(fernet, ciphertext)))
+
+
+def mark_incomplete_tasks_failed(output_root: Path) -> list[str]:
+    db_path = Path(os.getenv("IDEA_STATE_DB_PATH", output_root / "project-state.db"))
+    fernet = Fernet(_load_or_create_key(output_root))
+    recovered_task_ids: list[str] = []
+
+    for task_id, ciphertext in _load_all_task_ciphertexts(db_path):
+        task = _decrypt_payload(fernet, ciphertext)
+        if task.get("status") not in {"queued", "running"}:
+            continue
+        task["status"] = "failed"
+        task["error"] = "Backend restarted while this provision task was running."
+        task.setdefault("logs", []).append(
+            "Provisioning failed: backend restarted while this task was running."
+        )
+        task["updated_at"] = datetime.now(timezone.utc).isoformat()
+        _save_task_ciphertext(db_path, task_id, _encrypt_payload(fernet, task))
+        recovered_task_ids.append(task_id)
+
+    return recovered_task_ids

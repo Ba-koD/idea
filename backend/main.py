@@ -16,7 +16,13 @@ import generator
 from api_models import DeployRequest, EnvExchangeRequest, ProjectState, ProvisionRequest, normalize_project_state
 from env_import import apply_env_import, export_env_text, write_export_env_file
 from provisioning import ProvisioningPartialFailure, destroy_ncloud_target, provision_ncloud_target
-from state_store import load_or_initialize_state, save_state as save_encrypted_state
+from state_store import (
+    load_or_initialize_state,
+    load_task as load_encrypted_task,
+    mark_incomplete_tasks_failed,
+    save_state as save_encrypted_state,
+    save_task as save_encrypted_task,
+)
 
 app = FastAPI(title="idea Control Plane API")
 OUTPUT_ROOT = Path("outputs")
@@ -73,6 +79,7 @@ def create_provision_task(selected_env: str, operation: str) -> dict:
     }
     with PROVISION_TASKS_LOCK:
         PROVISION_TASKS[task["task_id"]] = task
+    save_encrypted_task(OUTPUT_ROOT, task)
     return task
 
 
@@ -80,23 +87,35 @@ def append_provision_log(task_id: str, message: str) -> None:
     with PROVISION_TASKS_LOCK:
         task = PROVISION_TASKS.get(task_id)
         if not task:
-            return
+            task = load_encrypted_task(OUTPUT_ROOT, task_id)
+            if not task:
+                return
+            PROVISION_TASKS[task_id] = task
         task["logs"].append(message)
         task["updated_at"] = datetime.now(timezone.utc).isoformat()
+        save_encrypted_task(OUTPUT_ROOT, task)
 
 
 def update_provision_task(task_id: str, **updates: object) -> None:
     with PROVISION_TASKS_LOCK:
         task = PROVISION_TASKS.get(task_id)
         if not task:
-            return
+            task = load_encrypted_task(OUTPUT_ROOT, task_id)
+            if not task:
+                return
+            PROVISION_TASKS[task_id] = task
         task.update(updates)
         task["updated_at"] = datetime.now(timezone.utc).isoformat()
+        save_encrypted_task(OUTPUT_ROOT, task)
 
 
 def get_provision_task(task_id: str) -> dict | None:
     with PROVISION_TASKS_LOCK:
         task = PROVISION_TASKS.get(task_id)
+        if not task:
+            task = load_encrypted_task(OUTPUT_ROOT, task_id)
+            if task:
+                PROVISION_TASKS[task_id] = task
         return json.loads(json.dumps(task)) if task else None
 
 
@@ -157,6 +176,11 @@ def build_gitops_bundle(state: dict, selected_env: str) -> dict:
 @app.on_event("startup")
 async def startup_event():
     ensure_project_state_file()
+    recovered_task_ids = mark_incomplete_tasks_failed(OUTPUT_ROOT)
+    for task_id in recovered_task_ids:
+        task = load_encrypted_task(OUTPUT_ROOT, task_id)
+        if task:
+            PROVISION_TASKS[task_id] = task
 
 
 @app.get("/api/project-state")
