@@ -795,7 +795,10 @@ function App() {
       }));
       setStatusMessage(payload.message || `${importedEnv.toUpperCase()} .env imported.`);
     } catch (error) {
-      setLogs((currentLogs) => appendLogMessage(currentLogs, `Env import failed: ${error.message}`));
+      setEnvLogs((currentLogs) => ({
+        ...currentLogs,
+        [activeEnv]: appendLogMessage(currentLogs[activeEnv] || [], `Env import failed: ${error.message}`)
+      }));
       setStatusMessage(`Env import failed: ${error.message}`);
     } finally {
       setIsImportingEnv(false);
@@ -858,7 +861,10 @@ function App() {
       }));
       setStatusMessage(payload.message || `${activeEnv.toUpperCase()} .env export generated.`);
     } catch (error) {
-      setLogs((currentLogs) => appendLogMessage(currentLogs, `Env export failed: ${error.message}`));
+      setEnvLogs((currentLogs) => ({
+        ...currentLogs,
+        [activeEnv]: appendLogMessage(currentLogs[activeEnv] || [], `Env export failed: ${error.message}`)
+      }));
       setStatusMessage(`Env export failed: ${error.message}`);
     } finally {
       setIsExportingEnv(false);

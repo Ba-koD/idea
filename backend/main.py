@@ -296,7 +296,7 @@ async def provision_target(req: ProvisionRequest):
                         f"/api/download-provision/{saved_state['project']['name']}/{selected_env}/argocd-cluster-secret"
                     ),
                     "logs": result["logs"],
-                    "message": f"{selected_env.upper()} Ncloud target provisioned and GitOps artifacts refreshed.",
+                    "message": f"{selected_env.upper()} Ncloud target provisioned and Argo CD inputs refreshed.",
                 }
             )
         if result.get("warnings"):
@@ -371,7 +371,7 @@ async def start_provision_target(req: ProvisionRequest):
                             f"/api/download-provision/{saved_state['project']['name']}/{payload['selected_env']}/argocd-cluster-secret"
                         ),
                         "logs": result["logs"],
-                        "message": f"{payload['selected_env'].upper()} Ncloud target provisioned and GitOps artifacts refreshed.",
+                        "message": f"{payload['selected_env'].upper()} Ncloud target provisioned and Argo CD inputs refreshed.",
                     }
                 )
             if result.get("warnings"):

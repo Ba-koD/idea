@@ -1242,6 +1242,14 @@ def ensure_runtime_dir(output_root: Path, project_name: str, selected_env: str) 
     return runtime_dir
 
 
+def ensure_clean_runtime_dir(output_root: Path, project_name: str, selected_env: str, directory_name: str) -> Path:
+    runtime_dir = output_root / project_name / selected_env / directory_name
+    if runtime_dir.exists():
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    return runtime_dir
+
+
 def write_runtime_terraform_files(runtime_dir: Path, tfvars: dict[str, Any]) -> None:
     (runtime_dir / "versions.tf").write_text(TERRAFORM_VERSIONS_TF, encoding="utf-8")
     (runtime_dir / "variables.tf").write_text(TERRAFORM_VARIABLES_TF, encoding="utf-8")
@@ -1279,6 +1287,102 @@ def remove_runtime_artifacts(runtime_dir: Path, login_key_name: str) -> None:
             login_key_path.unlink()
         except OSError:
             pass
+
+
+def remove_runtime_state_files(runtime_dir: Path) -> None:
+    for file_name in ("terraform.tfstate", "terraform.tfstate.backup"):
+        target = runtime_dir / file_name
+        if target.exists():
+            try:
+                target.unlink()
+            except OSError:
+                pass
+
+    terraform_dir = runtime_dir / ".terraform"
+    if terraform_dir.exists():
+        shutil.rmtree(terraform_dir, ignore_errors=True)
+
+
+def build_destroy_import_tfvars(project_state: dict[str, Any], selected_env: str) -> dict[str, Any]:
+    tfvars = build_runtime_tfvars(project_state, selected_env)
+    tfvars["existing_cluster_uuid"] = ""
+    tfvars["existing_vpc_no"] = ""
+    tfvars["existing_node_subnet_no"] = ""
+    tfvars["existing_lb_private_subnet_no"] = ""
+    tfvars["existing_lb_public_subnet_no"] = ""
+    tfvars["existing_node_pool_id"] = ""
+    return tfvars
+
+
+def build_destroy_import_targets(project_state: dict[str, Any], selected_env: str) -> list[tuple[str, str]]:
+    ncloud = project_state["targets"][selected_env]["ncloud"]
+    targets: list[tuple[str, str]] = []
+
+    vpc_no = str(ncloud.get("vpc_no", "")).strip()
+    if looks_like_resource_id(vpc_no):
+        targets.append(("ncloud_vpc.managed[0]", vpc_no))
+
+    node_subnet_no = str(ncloud.get("subnet_no", "")).strip()
+    if looks_like_resource_id(node_subnet_no):
+        targets.append(("ncloud_subnet.node[0]", node_subnet_no))
+
+    lb_private_subnet_no = str(ncloud.get("lb_subnet_no", "")).strip()
+    if looks_like_resource_id(lb_private_subnet_no):
+        targets.append(("ncloud_subnet.lb_private[0]", lb_private_subnet_no))
+
+    lb_public_subnet_no = str(ncloud.get("lb_public_subnet_no", "")).strip()
+    if looks_like_resource_id(lb_public_subnet_no):
+        targets.append(("ncloud_subnet.lb_public[0]", lb_public_subnet_no))
+
+    cluster_uuid = str(ncloud.get("cluster_uuid", "")).strip()
+    if looks_like_uuid(cluster_uuid):
+        targets.append(("ncloud_nks_cluster.cluster[0]", cluster_uuid))
+
+    node_pool_id = str(ncloud.get("node_pool_id", "")).strip()
+    if node_pool_id and not looks_like_placeholder(node_pool_id):
+        targets.append(("ncloud_nks_node_pool.node_pool[0]", node_pool_id))
+
+    return targets
+
+
+def validate_destroy_import_targets(project_state: dict[str, Any], selected_env: str) -> list[tuple[str, str]]:
+    ncloud = project_state["targets"][selected_env]["ncloud"]
+    required_fields = {
+        "cluster_uuid": looks_like_uuid(ncloud.get("cluster_uuid")),
+        "vpc_no": looks_like_resource_id(ncloud.get("vpc_no")),
+        "subnet_no": looks_like_resource_id(ncloud.get("subnet_no")),
+        "lb_subnet_no": looks_like_resource_id(ncloud.get("lb_subnet_no")),
+        "node_pool_id": bool(str(ncloud.get("node_pool_id", "")).strip() and not looks_like_placeholder(ncloud.get("node_pool_id"))),
+    }
+    missing = [field_name for field_name, is_present in required_fields.items() if not is_present]
+    if missing:
+        raise ValueError(
+            "Destroy needs the current Ncloud target ids so it can import the live resources into a temporary "
+            "Terraform state before deletion. Fill these fields first or re-run provision successfully: "
+            + ", ".join(missing)
+        )
+    return build_destroy_import_targets(project_state, selected_env)
+
+
+def import_existing_destroy_targets(
+    runtime_dir: Path,
+    terraform_bin: str,
+    command_env: dict[str, str],
+    import_targets: list[tuple[str, str]],
+    log_callback: Callable[[str], None] | None = None,
+) -> None:
+    for resource_address, resource_id in import_targets:
+        result = run_command(
+            [terraform_bin, "import", resource_address, resource_id],
+            runtime_dir,
+            command_env,
+            log_callback=log_callback,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"terraform import failed for {resource_address} ({resource_id}):\n"
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
 
 
 def delete_argocd_cluster_secret_from_platform(cluster_name: str, selected_env: str) -> dict[str, Any]:
@@ -1545,15 +1649,18 @@ def destroy_ncloud_target(
             + ", ".join(f"{item['ref']} (env {item['env']})" for item in missing_refs)
         )
 
-    if not runtime_state_has_managed_resources(runtime_dir):
-        raise ValueError(
-            "Destroy is only available when this environment still has a tracked Terraform runtime state. "
-            "The current target is in reuse/import mode only, so automatic destroy would be unsafe."
-        )
-
-    tfvars = build_runtime_tfvars(state, selected_env)
+    import_targets: list[tuple[str, str]] = []
+    destroy_runtime_dir = runtime_dir
+    using_import_destroy_state = False
+    if runtime_state_has_managed_resources(runtime_dir):
+        tfvars = build_runtime_tfvars(state, selected_env)
+    else:
+        import_targets = validate_destroy_import_targets(state, selected_env)
+        tfvars = build_destroy_import_tfvars(state, selected_env)
+        destroy_runtime_dir = ensure_clean_runtime_dir(output_root, project["name"], selected_env, "ncloud-destroy-runtime")
+        using_import_destroy_state = True
     validate_ncloud_preflight(tfvars, access_key_ref, access_key, secret_key_ref, secret_key)
-    write_runtime_terraform_files(runtime_dir, tfvars)
+    write_runtime_terraform_files(destroy_runtime_dir, tfvars)
 
     command_env = {
         **os.environ,
@@ -1570,44 +1677,68 @@ def destroy_ncloud_target(
         if log_callback is not None:
             log_callback(message)
 
-    emit(f"Prepared Terraform runtime in {runtime_dir}.")
+    emit(f"Prepared Terraform runtime in {destroy_runtime_dir}.")
     emit(
         f"Destroying Ncloud target cluster_name={tfvars['cluster_name']} "
         f"cluster_uuid={tfvars['existing_cluster_uuid'] or '(tracked state)'}."
     )
     emit("Running terraform init.")
-    init_result = run_command([terraform_bin, "init", "-backend=false"], runtime_dir, command_env, log_callback=log_callback)
+    init_result = run_command([terraform_bin, "init", "-backend=false"], destroy_runtime_dir, command_env, log_callback=log_callback)
     if init_result.returncode != 0:
         raise RuntimeError(f"terraform init failed:\n{init_result.stderr.strip() or init_result.stdout.strip()}")
     emit("terraform init completed.")
 
     emit("Running terraform validate.")
-    validate_result = run_command([terraform_bin, "validate"], runtime_dir, command_env, log_callback=log_callback)
+    validate_result = run_command([terraform_bin, "validate"], destroy_runtime_dir, command_env, log_callback=log_callback)
     if validate_result.returncode != 0:
         raise RuntimeError(f"terraform validate failed:\n{validate_result.stderr.strip() or validate_result.stdout.strip()}")
     emit("terraform validate completed.")
+
+    if using_import_destroy_state:
+        emit("Importing the current Ncloud resources into a temporary Terraform state for safe destroy.")
+        import_existing_destroy_targets(
+            destroy_runtime_dir,
+            terraform_bin,
+            command_env,
+            import_targets,
+            log_callback=log_callback,
+        )
+        emit("terraform import completed for the existing target resources.")
 
     if not apply:
         emit("Running terraform plan -destroy.")
         plan_result = run_command(
             [terraform_bin, "plan", "-destroy"],
-            runtime_dir,
+            destroy_runtime_dir,
             command_env,
             log_callback=log_callback,
         )
         if plan_result.returncode != 0:
             raise RuntimeError(f"terraform plan -destroy failed:\n{plan_result.stderr.strip() or plan_result.stdout.strip()}")
         emit("terraform plan -destroy completed.")
+        if using_import_destroy_state:
+            shutil.rmtree(destroy_runtime_dir, ignore_errors=True)
         return state, {
             "applied": False,
             "destroyed": False,
-            "runtime_dir": str(runtime_dir),
+            "runtime_dir": str(destroy_runtime_dir),
             "logs": logs,
             "warnings": [],
         }
 
     integration_logs: list[str] = []
     integration_warnings: list[str] = []
+    emit("Running terraform destroy.")
+    destroy_result = run_command(
+        [terraform_bin, "destroy", "-auto-approve"],
+        destroy_runtime_dir,
+        command_env,
+        log_callback=log_callback,
+    )
+    if destroy_result.returncode != 0:
+        raise RuntimeError(f"terraform destroy failed:\n{destroy_result.stderr.strip() or destroy_result.stdout.strip()}")
+    emit("terraform destroy completed.")
+
     try:
         platform_argocd_result = delete_argocd_cluster_secret_from_platform(
             tfvars["cluster_name"],
@@ -1620,25 +1751,17 @@ def destroy_ncloud_target(
             f"Reason: {exc}"
         )
 
-    emit("Running terraform destroy.")
-    destroy_result = run_command(
-        [terraform_bin, "destroy", "-auto-approve"],
-        runtime_dir,
-        command_env,
-        log_callback=log_callback,
-    )
-    if destroy_result.returncode != 0:
-        raise RuntimeError(f"terraform destroy failed:\n{destroy_result.stderr.strip() or destroy_result.stdout.strip()}")
-    emit("terraform destroy completed.")
-
     remove_runtime_artifacts(runtime_dir, tfvars["login_key_name"])
+    remove_runtime_state_files(runtime_dir)
+    if using_import_destroy_state:
+        shutil.rmtree(destroy_runtime_dir, ignore_errors=True)
     reset_ncloud_target_runtime_state(state, selected_env)
     state.setdefault("provisioning", {}).setdefault("last_results", {})[selected_env] = {
         "status": "destroyed",
         "operation": "destroy",
         "provisioned": False,
         "destroyed_at": datetime.now(timezone.utc).isoformat(),
-        "runtime_dir": str(runtime_dir),
+        "runtime_dir": str(destroy_runtime_dir),
         "cluster_uuid": "",
         "cluster_endpoint": "",
         "integration_logs": integration_logs,
@@ -1653,7 +1776,7 @@ def destroy_ncloud_target(
     return state, {
         "applied": True,
         "destroyed": True,
-        "runtime_dir": str(runtime_dir),
+        "runtime_dir": str(destroy_runtime_dir),
         "logs": logs,
         "warnings": integration_warnings,
         "outputs": {
