@@ -93,18 +93,17 @@ function App() {
     setProjectInfo({ ...projectInfo, [field]: value });
   };
 
-  // 다이어그램 크기(Scale)와 가독성을 시연용으로 대폭 강화
+  // 다이어그램 설정: 폰트와 간격을 대폭 키움
   const getDiagramCode = () => {
     const isProd = activeEnv === 'prod';
     const envLabel = activeEnv.toUpperCase();
     const themeColor = envs[activeEnv].color;
     const currentDomain = `${activeEnv === 'prod' ? 'www' : activeEnv}.${projectInfo.baseDomain}`;
     
-    // %%{init: ...}%% 구문에서 fontSize와 가독성 관련 변수를 대폭 상향 조정했습니다.
     return `%%{init: {
         'theme': 'base', 
         'themeVariables': { 
-          'fontSize': '24px', 
+          'fontSize': '32px', 
           'fontFamily': 'Pretendard, sans-serif',
           'primaryColor': '#fff',
           'edgeLabelBackground':'#ffffff',
@@ -115,15 +114,15 @@ function App() {
         'flowchart': { 
           'htmlLabels': true, 
           'curve': 'basis',
-          'nodeSpacing': 80,
-          'rankSpacing': 120,
+          'nodeSpacing': 100,
+          'rankSpacing': 150,
           'useMaxWidth': false
         }
       }}%%
       graph TD
       classDef clusterBox fill:none,stroke:${themeColor},stroke-width:4px,stroke-dasharray: 10 5;
       classDef nodeStyle fill:#fff,stroke:#232F3E,stroke-width:3px,rx:15,ry:15;
-      classDef activeNode fill:${themeColor},color:#fff,stroke-width:5px,rx:15,ry:15;
+      classDef activeNode fill:${themeColor},color:#fff,stroke-width:6px,rx:15,ry:15;
 
       subgraph External [Internet Access]
         User((User)) --> CF((☁️ Cloudflare Tunnel: ${currentDomain}))
@@ -238,19 +237,24 @@ function App() {
           </button>
 
           {downloadUrl && (
-            <a href={downloadUrl} className="download-btn-link" style={{ 
-              display: 'block', 
-              marginTop: '10px', 
-              padding: '12px', 
-              backgroundColor: '#10b981', 
-              color: 'white', 
-              textAlign: 'center', 
-              textDecoration: 'none', 
-              borderRadius: '8px',
-              fontWeight: 'bold',
-              fontSize: '14px',
-              boxShadow: '0 4px 6px rgba(16, 185, 129, 0.2)'
-            }}>
+            <a 
+              href={downloadUrl} 
+              download={`${projectInfo.name}_${activeEnv}_manifests.zip`} 
+              className="download-btn-link" 
+              style={{ 
+                display: 'block', 
+                marginTop: '10px', 
+                padding: '12px', 
+                backgroundColor: '#10b981', 
+                color: 'white', 
+                textAlign: 'center', 
+                textDecoration: 'none', 
+                borderRadius: '8px',
+                fontWeight: 'bold',
+                fontSize: '14px',
+                boxShadow: '0 4px 6px rgba(16, 185, 129, 0.2)'
+              }}
+            >
               📦 DOWNLOAD GITOPS BUNDLE
             </a>
           )}
@@ -263,7 +267,6 @@ function App() {
           </div>
           
           <div className="mermaid-wrapper">
-            {/* MermaidViewer 내부에서 svg가 꽉 차도록 MermaidViewer.js도 체크가 필요할 수 있습니다. */}
             <MermaidViewer chartCode={getDiagramCode()} />
           </div>
 
@@ -274,7 +277,7 @@ function App() {
             <div className="console-content">
               {logs.length === 0 && <span style={{color: '#444'}}>Waiting for reconciliation signal...</span>}
               {logs.map((log, i) => (
-                <div key={i}><span style={{color: '#555'}}>>>></span> {log}</div>
+                <div key={i}><span style={{color: '#555'}}>&gt;&gt;&gt;</span> {log}</div>
               ))}
               <div ref={logEndRef} />
             </div>
