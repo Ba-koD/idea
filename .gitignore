@@ -8,6 +8,7 @@ infra/ansible/generated/
 *.retry
 .env
 node_modules/
+__pycache__/
 
 # --- Frontend (React) ---
 frontend/node_modules/
