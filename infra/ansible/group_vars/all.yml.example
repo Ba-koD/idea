@@ -24,10 +24,5 @@ edge_namespace: edge-system
 monitoring_namespace: monitoring
 data_namespace: idea-data
 vault_namespace: vault
-gitops_repo_url: https://github.com/your-org/idea.git
-gitops_repo_branch: main
-gitops_repo_path: gitops/idea-platform/workloads
-gitops_repo_username: x-access-token
-gitops_repo_token: ""
 postgresql_password: replace-me-postgres
 vault_dev_root_token: replace-me-vault-root

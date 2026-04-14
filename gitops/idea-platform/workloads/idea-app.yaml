@@ -1,0 +1,1052 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: idea-frontend-assets
+  namespace: idea-system
+  labels:
+    app.kubernetes.io/instance: idea-platform
+data:
+  index.html: |
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>idea Runtime Settings</title>
+        <style>
+          :root {
+            color-scheme: light;
+            --bg: #f7f5f1;
+            --panel: #ffffff;
+            --panel-strong: #f0ebe2;
+            --line: #d9d2c7;
+            --ink: #171717;
+            --muted: #5f6368;
+            --accent: #0b6b66;
+            --accent-soft: #d7efeb;
+            --warn: #b42318;
+          }
+
+          * {
+            box-sizing: border-box;
+          }
+
+          body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background:
+              radial-gradient(circle at top left, rgba(11, 107, 102, 0.12), transparent 26%),
+              linear-gradient(180deg, #faf8f3 0%, #f3eee5 100%);
+            color: var(--ink);
+          }
+
+          main {
+            max-width: 1280px;
+            margin: 0 auto;
+            padding: 28px 18px 56px;
+          }
+
+          .hero {
+            display: grid;
+            gap: 12px;
+            margin-bottom: 22px;
+          }
+
+          .eyebrow {
+            display: inline-flex;
+            width: fit-content;
+            border-radius: 999px;
+            background: var(--accent-soft);
+            color: var(--accent);
+            padding: 6px 12px;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+          }
+
+          h1 {
+            margin: 0;
+            font-size: clamp(2.2rem, 6vw, 4.6rem);
+            line-height: 0.92;
+            letter-spacing: -0.05em;
+          }
+
+          p {
+            margin: 0;
+            color: var(--muted);
+            line-height: 1.5;
+          }
+
+          .summary {
+            display: grid;
+            gap: 14px;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            margin: 22px 0 28px;
+          }
+
+          .summary-card,
+          .panel,
+          .secret-drawer {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            box-shadow: 0 10px 30px rgba(23, 23, 23, 0.05);
+          }
+
+          .summary-card {
+            padding: 18px;
+          }
+
+          .summary-label {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--muted);
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+          }
+
+          .summary-value {
+            margin-top: 8px;
+            font-size: 1.28rem;
+            font-weight: 700;
+            word-break: break-word;
+          }
+
+          .layout {
+            display: grid;
+            gap: 18px;
+            grid-template-columns: minmax(0, 1.7fr) minmax(320px, 0.9fr);
+          }
+
+          .stack {
+            display: grid;
+            gap: 18px;
+          }
+
+          .panel {
+            padding: 18px;
+          }
+
+          .panel-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: center;
+            margin-bottom: 16px;
+          }
+
+          .panel h2 {
+            margin: 0;
+            font-size: 1.05rem;
+          }
+
+          .subtext {
+            font-size: 13px;
+            color: var(--muted);
+          }
+
+          .grid {
+            display: grid;
+            gap: 12px;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+          }
+
+          label {
+            display: grid;
+            gap: 7px;
+            font-size: 13px;
+            color: var(--muted);
+          }
+
+          input,
+          textarea,
+          select {
+            width: 100%;
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            padding: 11px 12px;
+            background: #fff;
+            color: var(--ink);
+            font: inherit;
+          }
+
+          textarea {
+            min-height: 108px;
+            resize: vertical;
+          }
+
+          .tabs {
+            display: inline-flex;
+            gap: 8px;
+            flex-wrap: wrap;
+          }
+
+          .tabs button {
+            border: 1px solid var(--line);
+            background: #fff;
+            color: var(--ink);
+            border-radius: 999px;
+            padding: 9px 14px;
+            font: inherit;
+            cursor: pointer;
+          }
+
+          .tabs button.active {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: #fff;
+          }
+
+          .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            width: fit-content;
+            padding: 8px 11px;
+            border-radius: 999px;
+            background: var(--panel-strong);
+            color: var(--ink);
+            font-size: 13px;
+            font-weight: 700;
+          }
+
+          .badge strong {
+            color: var(--accent);
+          }
+
+          .secret-drawer {
+            padding: 18px;
+            position: sticky;
+            top: 18px;
+          }
+
+          .secret-drawer h2 {
+            margin: 0 0 8px;
+            font-size: 1.05rem;
+          }
+
+          .secret-list {
+            display: grid;
+            gap: 10px;
+            margin-top: 14px;
+          }
+
+          .secret-item {
+            border-top: 1px solid var(--line);
+            padding-top: 10px;
+          }
+
+          .secret-item strong {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 13px;
+          }
+
+          .secret-item span {
+            display: block;
+            font-size: 13px;
+            color: var(--muted);
+            word-break: break-word;
+          }
+
+          .status-ok {
+            color: var(--accent);
+          }
+
+          .status-bad {
+            color: var(--warn);
+          }
+
+          .hint {
+            margin-top: 10px;
+            font-size: 13px;
+            color: var(--muted);
+          }
+
+          @media (max-width: 980px) {
+            .layout {
+              grid-template-columns: 1fr;
+            }
+
+            .secret-drawer {
+              position: static;
+            }
+          }
+        </style>
+      </head>
+      <body>
+        <main>
+          <section class="hero">
+            <span class="eyebrow">idea runtime control</span>
+            <h1>dev / stage / prod settings view</h1>
+            <p>
+              This screen previews the runtime `Project State` that `tmp` owns.
+              Repo code stays independent. Ncloud target settings, Cloudflare routing,
+              allowlists, and env or secret refs are controlled here.
+            </p>
+          </section>
+
+          <section class="summary">
+            <article class="summary-card">
+              <div class="summary-label">Project</div>
+              <div class="summary-value" id="summary-project">loading</div>
+            </article>
+            <article class="summary-card">
+              <div class="summary-label">Repo</div>
+              <div class="summary-value" id="summary-repo">loading</div>
+            </article>
+            <article class="summary-card">
+              <div class="summary-label">Current Env Tab</div>
+              <div class="summary-value" id="summary-env">dev</div>
+            </article>
+            <article class="summary-card">
+              <div class="summary-label">Backend Time</div>
+              <div class="summary-value" id="summary-time">loading</div>
+            </article>
+          </section>
+
+          <section class="layout">
+            <div class="stack">
+              <article class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>Environment Tabs</h2>
+                    <div class="subtext">Same repo, different target and runtime values per environment.</div>
+                  </div>
+                  <div class="tabs" id="env-tabs"></div>
+                </div>
+                <div class="badge">Selected environment: <strong id="selected-env">dev</strong></div>
+              </article>
+
+              <article class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>Repository</h2>
+                    <div class="subtext">App repo stays independent. Deployment policy belongs to tmp.</div>
+                  </div>
+                </div>
+                <div class="grid">
+                  <label>Project Name<input id="project-name" readonly /></label>
+                  <label>Git Ref<input id="project-ref" readonly /></label>
+                  <label style="grid-column: 1 / -1;">App Repo URL<input id="project-repo" readonly /></label>
+                </div>
+              </article>
+
+              <article class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>Build</h2>
+                    <div class="subtext">These values are runtime inputs, not repo-owned deployment policy.</div>
+                  </div>
+                </div>
+                <div class="grid">
+                  <label>Source Strategy<input id="build-strategy" readonly /></label>
+                  <label>Frontend Context<input id="build-frontend-context" readonly /></label>
+                  <label>Frontend Dockerfile<input id="build-frontend-dockerfile" readonly /></label>
+                  <label>Backend Context<input id="build-backend-context" readonly /></label>
+                  <label style="grid-column: 1 / -1;">Backend Dockerfile<input id="build-backend-dockerfile" readonly /></label>
+                </div>
+              </article>
+
+              <article class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>Argo CD</h2>
+                    <div class="subtext">tmp writes generated manifests. Argo CD only syncs the GitOps output.</div>
+                  </div>
+                </div>
+                <div class="grid">
+                  <label>Project<input id="argo-project" readonly /></label>
+                  <label>Destination Name<input id="argo-destination-name" readonly /></label>
+                  <label>Destination Server<input id="argo-destination-server" readonly /></label>
+                  <label>GitOps Branch<input id="argo-gitops-branch" readonly /></label>
+                  <label>GitOps Path<input id="argo-gitops-path" readonly /></label>
+                  <label style="grid-column: 1 / -1;">GitOps Repo URL<input id="argo-gitops-repo" readonly /></label>
+                </div>
+              </article>
+
+              <article class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>Ncloud Target</h2>
+                    <div class="subtext">Per-environment server sizing, node pool, VPC, subnet, and autoscaling inputs.</div>
+                  </div>
+                </div>
+                <div class="grid">
+                  <label>Provider<input id="target-provider" readonly /></label>
+                  <label>Cluster Type<input id="target-cluster-type" readonly /></label>
+                  <label>Namespace<input id="target-namespace" readonly /></label>
+                  <label>Service Port<input id="target-service-port" readonly /></label>
+                  <label>Region Code<input id="target-region" readonly /></label>
+                  <label>Cluster Name<input id="target-cluster-name" readonly /></label>
+                  <label>Cluster Version<input id="target-cluster-version" readonly /></label>
+                  <label>Zone Code<input id="target-zone" readonly /></label>
+                  <label>VPC No<input id="target-vpc" readonly /></label>
+                  <label>Subnet No<input id="target-subnet" readonly /></label>
+                  <label>LB Subnet No<input id="target-lb-subnet" readonly /></label>
+                  <label>Node Pool Name<input id="target-node-pool" readonly /></label>
+                  <label>Node Count<input id="target-node-count" readonly /></label>
+                  <label>Node Product Code<input id="target-node-product" readonly /></label>
+                  <label>Block Storage Size GB<input id="target-storage" readonly /></label>
+                  <label>Autoscale<input id="target-autoscale" readonly /></label>
+                  <label>Autoscale Min<input id="target-autoscale-min" readonly /></label>
+                  <label>Autoscale Max<input id="target-autoscale-max" readonly /></label>
+                </div>
+              </article>
+
+              <article class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>Routing and Cloudflare</h2>
+                    <div class="subtext">Cloudflare API reconcile owns hostname, tunnel, and IP access policy.</div>
+                  </div>
+                </div>
+                <div class="grid">
+                  <label>Base Domain<input id="cloudflare-base-domain" readonly /></label>
+                  <label>Public Subdomain Prefix<input id="cloudflare-subdomain-prefix" readonly /></label>
+                  <label>Tunnel Name<input id="cloudflare-tunnel-name" readonly /></label>
+                  <label>Route Mode<input id="cloudflare-route-mode" readonly /></label>
+                  <label>Dev Hostname<input id="routing-dev-hostname" readonly /></label>
+                  <label>Stage Hostname<input id="routing-stage-hostname" readonly /></label>
+                  <label>Prod Hostname<input id="routing-prod-hostname" readonly /></label>
+                  <label>Entry Service<input id="routing-entry-service" readonly /></label>
+                  <label>Backend Service<input id="routing-backend-service" readonly /></label>
+                  <label>Backend Base Path<input id="routing-backend-base-path" readonly /></label>
+                </div>
+              </article>
+
+              <article class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>Environment</h2>
+                    <div class="subtext">Same repo, different injected env values per selected panel.</div>
+                  </div>
+                </div>
+                <div class="grid">
+                  <label>APP_ENV<input id="env-app-env" readonly /></label>
+                  <label>APP_DISPLAY_NAME<input id="env-display-name" readonly /></label>
+                  <label>PUBLIC_API_BASE_URL<input id="env-api-base-url" readonly /></label>
+                </div>
+                <div class="hint" id="env-preview-text">loading</div>
+              </article>
+
+              <article class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>Delivery</h2>
+                    <div class="subtext">Prod blue-green and health rules still belong to tmp.</div>
+                  </div>
+                </div>
+                <div class="grid">
+                  <label>Blue-Green Enabled<input id="delivery-blue-green" readonly /></label>
+                  <label>Healthcheck Path<input id="delivery-healthcheck-path" readonly /></label>
+                  <label>Healthcheck Timeout<input id="delivery-healthcheck-timeout" readonly /></label>
+                  <label>Rollback On Failure<input id="delivery-rollback" readonly /></label>
+                </div>
+              </article>
+            </div>
+
+            <aside class="secret-drawer">
+              <h2>Secret Drawer</h2>
+              <div class="subtext">
+                Secret values are not stored in the repo. tmp owns refs for repo access, Ncloud credentials,
+                Cloudflare API access, and per-environment runtime secrets.
+              </div>
+              <div class="secret-list" id="secret-list"></div>
+              <div class="hint">
+                This is a live settings view backed by a sample runtime `Project State` API.
+                Save/apply persistence is the next worker step, not part of this static screen.
+              </div>
+            </aside>
+          </section>
+        </main>
+
+        <script>
+          const inputs = {
+            "project-name": document.getElementById("project-name"),
+            "project-ref": document.getElementById("project-ref"),
+            "project-repo": document.getElementById("project-repo"),
+            "build-strategy": document.getElementById("build-strategy"),
+            "build-frontend-context": document.getElementById("build-frontend-context"),
+            "build-frontend-dockerfile": document.getElementById("build-frontend-dockerfile"),
+            "build-backend-context": document.getElementById("build-backend-context"),
+            "build-backend-dockerfile": document.getElementById("build-backend-dockerfile"),
+            "argo-project": document.getElementById("argo-project"),
+            "argo-destination-name": document.getElementById("argo-destination-name"),
+            "argo-destination-server": document.getElementById("argo-destination-server"),
+            "argo-gitops-branch": document.getElementById("argo-gitops-branch"),
+            "argo-gitops-path": document.getElementById("argo-gitops-path"),
+            "argo-gitops-repo": document.getElementById("argo-gitops-repo"),
+            "target-provider": document.getElementById("target-provider"),
+            "target-cluster-type": document.getElementById("target-cluster-type"),
+            "target-namespace": document.getElementById("target-namespace"),
+            "target-service-port": document.getElementById("target-service-port"),
+            "target-region": document.getElementById("target-region"),
+            "target-cluster-name": document.getElementById("target-cluster-name"),
+            "target-cluster-version": document.getElementById("target-cluster-version"),
+            "target-zone": document.getElementById("target-zone"),
+            "target-vpc": document.getElementById("target-vpc"),
+            "target-subnet": document.getElementById("target-subnet"),
+            "target-lb-subnet": document.getElementById("target-lb-subnet"),
+            "target-node-pool": document.getElementById("target-node-pool"),
+            "target-node-count": document.getElementById("target-node-count"),
+            "target-node-product": document.getElementById("target-node-product"),
+            "target-storage": document.getElementById("target-storage"),
+            "target-autoscale": document.getElementById("target-autoscale"),
+            "target-autoscale-min": document.getElementById("target-autoscale-min"),
+            "target-autoscale-max": document.getElementById("target-autoscale-max"),
+            "cloudflare-base-domain": document.getElementById("cloudflare-base-domain"),
+            "cloudflare-subdomain-prefix": document.getElementById("cloudflare-subdomain-prefix"),
+            "cloudflare-tunnel-name": document.getElementById("cloudflare-tunnel-name"),
+            "cloudflare-route-mode": document.getElementById("cloudflare-route-mode"),
+            "routing-dev-hostname": document.getElementById("routing-dev-hostname"),
+            "routing-stage-hostname": document.getElementById("routing-stage-hostname"),
+            "routing-prod-hostname": document.getElementById("routing-prod-hostname"),
+            "routing-entry-service": document.getElementById("routing-entry-service"),
+            "routing-backend-service": document.getElementById("routing-backend-service"),
+            "routing-backend-base-path": document.getElementById("routing-backend-base-path"),
+            "env-app-env": document.getElementById("env-app-env"),
+            "env-display-name": document.getElementById("env-display-name"),
+            "env-api-base-url": document.getElementById("env-api-base-url"),
+            "delivery-blue-green": document.getElementById("delivery-blue-green"),
+            "delivery-healthcheck-path": document.getElementById("delivery-healthcheck-path"),
+            "delivery-healthcheck-timeout": document.getElementById("delivery-healthcheck-timeout"),
+            "delivery-rollback": document.getElementById("delivery-rollback")
+          };
+
+          const envTabs = document.getElementById("env-tabs");
+          const secretList = document.getElementById("secret-list");
+          const selectedEnvEl = document.getElementById("selected-env");
+          const summaryProjectEl = document.getElementById("summary-project");
+          const summaryRepoEl = document.getElementById("summary-repo");
+          const summaryEnvEl = document.getElementById("summary-env");
+          const summaryTimeEl = document.getElementById("summary-time");
+          const envPreviewText = document.getElementById("env-preview-text");
+
+          let currentEnv = "dev";
+          let projectState = null;
+
+          function setValue(id, value) {
+            inputs[id].value = value == null ? "" : String(value);
+          }
+
+          function renderSecretList(state, envName) {
+            const items = [];
+
+            items.push(["Repo Access", state.project.repo_access_secret_ref]);
+            items.push(["GitOps Repo Access", state.argo.gitops_repo_access_secret_ref]);
+            items.push(["Cloudflare API", state.cloudflare.api_token_secret_ref]);
+
+            const target = state.targets[envName] || {};
+            const ncloud = target.ncloud || {};
+            items.push(["Ncloud Access Key", ncloud.access_key_secret_ref || "-"]);
+            items.push(["Ncloud Secret Key", ncloud.secret_key_secret_ref || "-"]);
+
+            Object.entries(state.secrets[envName] || {}).forEach(function (entry) {
+              items.push([envName + " Secret: " + entry[0], entry[1]]);
+            });
+
+            secretList.innerHTML = "";
+            items.forEach(function (entry) {
+              const item = document.createElement("div");
+              item.className = "secret-item";
+              const label = document.createElement("strong");
+              label.textContent = entry[0];
+              const value = document.createElement("span");
+              value.textContent = entry[1];
+              item.appendChild(label);
+              item.appendChild(value);
+              secretList.appendChild(item);
+            });
+          }
+
+          function renderTabs() {
+            envTabs.innerHTML = "";
+            ["dev", "stage", "prod"].forEach(function (envName) {
+              const button = document.createElement("button");
+              button.type = "button";
+              button.textContent = envName;
+              if (envName === currentEnv) {
+                button.className = "active";
+              }
+              button.addEventListener("click", function () {
+                currentEnv = envName;
+                renderAll();
+              });
+              envTabs.appendChild(button);
+            });
+          }
+
+          function renderAll() {
+            if (!projectState) {
+              return;
+            }
+
+            const target = projectState.targets[currentEnv];
+            const runtimeEnv = projectState.env[currentEnv];
+            const runtimeSecrets = projectState.secrets[currentEnv];
+            const ncloud = target.ncloud || {};
+
+            summaryProjectEl.textContent = projectState.project.name;
+            summaryRepoEl.textContent = projectState.project.app_repo_url;
+            summaryEnvEl.textContent = currentEnv;
+            selectedEnvEl.textContent = currentEnv;
+
+            setValue("project-name", projectState.project.name);
+            setValue("project-ref", projectState.project.git_ref);
+            setValue("project-repo", projectState.project.app_repo_url);
+
+            setValue("build-strategy", projectState.build.source_strategy);
+            setValue("build-frontend-context", projectState.build.frontend_context);
+            setValue("build-frontend-dockerfile", projectState.build.frontend_dockerfile_path);
+            setValue("build-backend-context", projectState.build.backend_context);
+            setValue("build-backend-dockerfile", projectState.build.backend_dockerfile_path);
+
+            setValue("argo-project", projectState.argo.project_name);
+            setValue("argo-destination-name", projectState.argo.destination_name);
+            setValue("argo-destination-server", projectState.argo.destination_server);
+            setValue("argo-gitops-branch", projectState.argo.gitops_repo_branch);
+            setValue("argo-gitops-path", projectState.argo.gitops_repo_path);
+            setValue("argo-gitops-repo", projectState.argo.gitops_repo_url);
+
+            setValue("target-provider", target.provider);
+            setValue("target-cluster-type", target.cluster_type);
+            setValue("target-namespace", target.namespace);
+            setValue("target-service-port", target.service_port);
+            setValue("target-region", ncloud.region_code);
+            setValue("target-cluster-name", ncloud.cluster_name);
+            setValue("target-cluster-version", ncloud.cluster_version);
+            setValue("target-zone", ncloud.zone_code);
+            setValue("target-vpc", ncloud.vpc_no);
+            setValue("target-subnet", ncloud.subnet_no);
+            setValue("target-lb-subnet", ncloud.lb_subnet_no);
+            setValue("target-node-pool", ncloud.node_pool_name);
+            setValue("target-node-count", ncloud.node_count);
+            setValue("target-node-product", ncloud.node_product_code);
+            setValue("target-storage", ncloud.block_storage_size_gb);
+            setValue("target-autoscale", ncloud.autoscale_enabled);
+            setValue("target-autoscale-min", ncloud.autoscale_min_node_count);
+            setValue("target-autoscale-max", ncloud.autoscale_max_node_count);
+
+            setValue("cloudflare-base-domain", projectState.cloudflare.base_domain);
+            setValue("cloudflare-subdomain-prefix", projectState.cloudflare.public_subdomain_prefix);
+            setValue("cloudflare-tunnel-name", projectState.cloudflare.tunnel_name);
+            setValue("cloudflare-route-mode", projectState.cloudflare.route_mode);
+
+            setValue("routing-dev-hostname", projectState.routing.dev_hostname);
+            setValue("routing-stage-hostname", projectState.routing.stage_hostname);
+            setValue("routing-prod-hostname", projectState.routing.prod_hostname);
+            setValue("routing-entry-service", projectState.routing.entry_service_name);
+            setValue("routing-backend-service", projectState.routing.backend_service_name);
+            setValue("routing-backend-base-path", projectState.routing.backend_base_path);
+
+            setValue("env-app-env", runtimeEnv.APP_ENV);
+            setValue("env-display-name", runtimeEnv.APP_DISPLAY_NAME);
+            setValue("env-api-base-url", runtimeEnv.PUBLIC_API_BASE_URL);
+
+            setValue("delivery-blue-green", projectState.delivery.prod_blue_green_enabled);
+            setValue("delivery-healthcheck-path", projectState.delivery.healthcheck_path);
+            setValue("delivery-healthcheck-timeout", projectState.delivery.healthcheck_timeout_seconds);
+            setValue("delivery-rollback", projectState.delivery.rollback_on_failure);
+
+            envPreviewText.textContent =
+              "Selected " + currentEnv + " environment. APP_ENV=" +
+              runtimeEnv.APP_ENV + ", APP_DISPLAY_NAME=" + runtimeEnv.APP_DISPLAY_NAME +
+              ", runtime secret refs=" + Object.keys(runtimeSecrets || {}).join(", ");
+
+            renderTabs();
+            renderSecretList(projectState, currentEnv);
+          }
+
+          async function refresh() {
+            const [stateResponse, timeResponse] = await Promise.all([
+              fetch("/api/project-state", { cache: "no-store" }),
+              fetch("/api/time", { cache: "no-store" })
+            ]);
+
+            if (!stateResponse.ok) {
+              throw new Error("project-state returned " + stateResponse.status);
+            }
+            if (!timeResponse.ok) {
+              throw new Error("time returned " + timeResponse.status);
+            }
+
+            projectState = await stateResponse.json();
+            const timePayload = await timeResponse.json();
+            summaryTimeEl.textContent =
+              (timePayload.serverTime || "-") + " / " + (timePayload.hostname || "-");
+            renderAll();
+          }
+
+          refresh().catch(function (error) {
+            summaryProjectEl.textContent = error.message;
+            summaryRepoEl.textContent = "failed to load runtime state";
+            summaryTimeEl.textContent = "unavailable";
+          });
+        </script>
+      </body>
+    </html>
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: idea-frontend
+  namespace: idea-system
+  labels:
+    app.kubernetes.io/instance: idea-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: idea-frontend
+  template:
+    metadata:
+      labels:
+        app: idea-frontend
+        app.kubernetes.io/instance: idea-platform
+    spec:
+      containers:
+        - name: frontend
+          image: nginx:1.27-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+              name: http
+          volumeMounts:
+            - name: frontend-assets
+              mountPath: /usr/share/nginx/html/index.html
+              subPath: index.html
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: frontend-assets
+          configMap:
+            name: idea-frontend-assets
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: idea-frontend
+  namespace: idea-system
+  labels:
+    app.kubernetes.io/instance: idea-platform
+spec:
+  selector:
+    app: idea-frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: idea-backend-source
+  namespace: idea-system
+  labels:
+    app.kubernetes.io/instance: idea-platform
+data:
+  server.js: |
+    const http = require("http");
+    const os = require("os");
+
+    const port = Number(process.env.PORT || "8080");
+    const appEnv = process.env.APP_ENV || "platform";
+
+    const projectState = {
+      project: {
+        name: "repo-example",
+        app_repo_url: "https://github.com/Ba-koD/repo_example.git",
+        git_ref: "main",
+        repo_access_secret_ref: "github-repo-example-token",
+      },
+      build: {
+        source_strategy: "platform_build_runner",
+        frontend_context: "frontend",
+        frontend_dockerfile_path: "frontend/Dockerfile",
+        backend_context: "backend",
+        backend_dockerfile_path: "backend/Dockerfile",
+      },
+      argo: {
+        project_name: "default",
+        destination_name: "ncloud-nks-dev",
+        destination_server: "https://kubernetes.default.svc",
+        gitops_repo_url: "https://github.com/Ba-koD/idea.git",
+        gitops_repo_branch: "main",
+        gitops_repo_path: "gitops/generated/repo-example",
+        gitops_repo_access_secret_ref: "gitops-repo-token",
+      },
+      cloudflare: {
+        enabled: true,
+        account_id: "2052eb94f7b555bd3bf9db83c1f4edbf",
+        zone_id: "aaafd11f9c6912ba37c1d52a69b78398",
+        base_domain: "rnen.kr",
+        public_subdomain_prefix: "repo-example",
+        api_token_secret_ref: "cloudflare-api-token",
+        tunnel_name: "repo-example-platform",
+        route_mode: "platform_caddy",
+      },
+      targets: {
+        dev: {
+          provider: "ncloud",
+          cluster_type: "nks",
+          namespace: "repo-example-dev",
+          service_port: 80,
+          ncloud: {
+            region_code: "KR",
+            cluster_name: "idea-dev",
+            cluster_version: "1.30",
+            zone_code: "KR-2",
+            vpc_no: "vpc-dev",
+            subnet_no: "subnet-dev",
+            lb_subnet_no: "lb-subnet-dev",
+            node_pool_name: "repo-example-dev-pool",
+            node_count: 2,
+            node_product_code: "SVR.VSVR.STAND.C002.M004.NET.SSD.B050.G002",
+            block_storage_size_gb: 50,
+            autoscale_enabled: true,
+            autoscale_min_node_count: 2,
+            autoscale_max_node_count: 4,
+            access_key_secret_ref: "ncloud-dev-access-key",
+            secret_key_secret_ref: "ncloud-dev-secret-key",
+          },
+        },
+        stage: {
+          provider: "ncloud",
+          cluster_type: "nks",
+          namespace: "repo-example-stage",
+          service_port: 80,
+          ncloud: {
+            region_code: "KR",
+            cluster_name: "idea-stage",
+            cluster_version: "1.30",
+            zone_code: "KR-2",
+            vpc_no: "vpc-stage",
+            subnet_no: "subnet-stage",
+            lb_subnet_no: "lb-subnet-stage",
+            node_pool_name: "repo-example-stage-pool",
+            node_count: 2,
+            node_product_code: "SVR.VSVR.STAND.C002.M004.NET.SSD.B050.G002",
+            block_storage_size_gb: 50,
+            autoscale_enabled: true,
+            autoscale_min_node_count: 2,
+            autoscale_max_node_count: 4,
+            access_key_secret_ref: "ncloud-stage-access-key",
+            secret_key_secret_ref: "ncloud-stage-secret-key",
+          },
+        },
+        prod: {
+          provider: "ncloud",
+          cluster_type: "nks",
+          namespace: "repo-example-prod",
+          service_port: 80,
+          ncloud: {
+            region_code: "KR",
+            cluster_name: "idea-prod",
+            cluster_version: "1.30",
+            zone_code: "KR-2",
+            vpc_no: "vpc-prod",
+            subnet_no: "subnet-prod",
+            lb_subnet_no: "lb-subnet-prod",
+            node_pool_name: "repo-example-prod-pool",
+            node_count: 3,
+            node_product_code: "SVR.VSVR.STAND.C004.M008.NET.SSD.B100.G002",
+            block_storage_size_gb: 100,
+            autoscale_enabled: true,
+            autoscale_min_node_count: 3,
+            autoscale_max_node_count: 6,
+            access_key_secret_ref: "ncloud-prod-access-key",
+            secret_key_secret_ref: "ncloud-prod-secret-key",
+          },
+        },
+      },
+      routing: {
+        dev_hostname: "repo-example-dev.rnen.kr",
+        stage_hostname: "repo-example-stage.rnen.kr",
+        prod_hostname: "repo-example.rnen.kr",
+        entry_service_name: "frontend",
+        backend_service_name: "backend",
+        backend_base_path: "/api",
+      },
+      env: {
+        dev: {
+          APP_ENV: "dev",
+          APP_DISPLAY_NAME: "Repo Example Dev",
+          PUBLIC_API_BASE_URL: "/api",
+        },
+        stage: {
+          APP_ENV: "stage",
+          APP_DISPLAY_NAME: "Repo Example Stage",
+          PUBLIC_API_BASE_URL: "/api",
+        },
+        prod: {
+          APP_ENV: "prod",
+          APP_DISPLAY_NAME: "Repo Example Prod",
+          PUBLIC_API_BASE_URL: "/api",
+        },
+      },
+      secrets: {
+        dev: {
+          EXAMPLE_API_TOKEN: "secret://repo-example/dev/example-api-token",
+        },
+        stage: {
+          EXAMPLE_API_TOKEN: "secret://repo-example/stage/example-api-token",
+        },
+        prod: {
+          EXAMPLE_API_TOKEN: "secret://repo-example/prod/example-api-token",
+        },
+      },
+      access: {
+        admin_allowed_source_ips: ["58.123.221.76/32"],
+        dev_allowed_source_ips: ["58.123.221.76/32"],
+        stage_allowed_source_ips: ["58.123.221.76/32"],
+      },
+      delivery: {
+        prod_blue_green_enabled: true,
+        healthcheck_path: "/api/healthz",
+        healthcheck_timeout_seconds: 30,
+        rollback_on_failure: true,
+      },
+    };
+
+    function send(response, statusCode, payload) {
+      response.writeHead(statusCode, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+      response.end(JSON.stringify(payload));
+    }
+
+    function timePayload(status) {
+      return {
+        status,
+        service: "idea-backend",
+        environment: appEnv,
+        serverTime: new Date().toISOString(),
+        hostname: os.hostname(),
+      };
+    }
+
+    const server = http.createServer((request, response) => {
+      if (request.method !== "GET") {
+        send(response, 405, { error: "method not allowed" });
+        return;
+      }
+
+      if (request.url === "/api" || request.url === "/api/") {
+        send(response, 200, timePayload("ok"));
+        return;
+      }
+
+      if (request.url === "/api/time") {
+        send(response, 200, timePayload("ok"));
+        return;
+      }
+
+      if (request.url === "/api/healthz") {
+        send(response, 200, timePayload("ok"));
+        return;
+      }
+
+      if (request.url === "/api/readyz") {
+        send(response, 200, timePayload("ready"));
+        return;
+      }
+
+      if (request.url === "/api/project-state") {
+        send(response, 200, projectState);
+        return;
+      }
+
+      send(response, 404, {
+        error: "not found",
+        path: request.url,
+        hostname: os.hostname(),
+      });
+    });
+
+    server.listen(port, "0.0.0.0", () => {
+      console.log("idea-backend listening on " + port);
+    });
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: idea-backend
+  namespace: idea-system
+  labels:
+    app.kubernetes.io/instance: idea-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: idea-backend
+  template:
+    metadata:
+      labels:
+        app: idea-backend
+        app.kubernetes.io/instance: idea-platform
+    spec:
+      containers:
+        - name: backend
+          image: node:22-alpine
+          imagePullPolicy: IfNotPresent
+          command:
+            - node
+            - /app/server.js
+          env:
+            - name: PORT
+              value: "8080"
+            - name: APP_ENV
+              value: "platform"
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - name: backend-source
+              mountPath: /app/server.js
+              subPath: server.js
+          readinessProbe:
+            httpGet:
+              path: /api/readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: backend-source
+          configMap:
+            name: idea-backend-source
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: idea-backend
+  namespace: idea-system
+  labels:
+    app.kubernetes.io/instance: idea-platform
+spec:
+  selector:
+    app: idea-backend
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+  type: ClusterIP

@@ -20,9 +20,6 @@ locals {
     enable_cloudflare_reconciliation = var.enable_cloudflare_reconciliation
     cloudflare_public_subdomain      = var.cloudflare_public_subdomain
     cloudflare_tunnel_name           = var.cloudflare_tunnel_name
-    gitops_repo_url                  = var.gitops_repo_url
-    gitops_repo_branch               = var.gitops_repo_branch
-    gitops_repo_path                 = var.gitops_repo_path
     platform_caddy_backend_path      = var.platform_caddy_backend_base_path
     namespaces = {
       idea       = var.idea_namespace
@@ -62,11 +59,6 @@ locals {
     cloudflare_public_subdomain      = var.cloudflare_public_subdomain
     cloudflare_tunnel_name           = var.cloudflare_tunnel_name
     cloudflare_admin_allowed_ips     = var.cloudflare_admin_allowed_ips
-    gitops_repo_url                  = var.gitops_repo_url
-    gitops_repo_branch               = var.gitops_repo_branch
-    gitops_repo_path                 = var.gitops_repo_path
-    gitops_repo_username             = var.gitops_repo_username
-    gitops_repo_token                = var.gitops_repo_token
     platform_caddy_backend_base_path = var.platform_caddy_backend_base_path
     idea_namespace                   = var.idea_namespace
     edge_namespace                   = var.edge_namespace
@@ -108,11 +100,6 @@ resource "terraform_data" "platform_contract" {
     precondition {
       condition     = startswith(var.platform_caddy_backend_base_path, "/")
       error_message = "platform_caddy_backend_base_path must start with '/'."
-    }
-
-    precondition {
-      condition     = trimspace(var.gitops_repo_url) != ""
-      error_message = "gitops_repo_url must be set."
     }
   }
 }
