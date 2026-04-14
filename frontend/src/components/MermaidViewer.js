@@ -11,7 +11,7 @@ mermaid.initialize({
     htmlLabels: true, 
     curve: 'basis'
   },
-  fontFamily: 'Pretendard'
+  fontFamily: 'Pretendard Variable, Pretendard, SUIT Variable, SUIT, Noto Sans KR, sans-serif'
 });
 
 const MermaidViewer = ({ chartCode }) => {

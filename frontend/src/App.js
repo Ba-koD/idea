@@ -5,6 +5,11 @@ import MermaidViewer from './components/MermaidViewer';
 const ENVIRONMENTS = ['dev', 'stage', 'prod'];
 const STORAGE_KEY = 'idea-project-state-v2';
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '/api';
+const ENVIRONMENT_META = {
+  dev: { color: '#3b82f6', label: 'Development' },
+  stage: { color: '#f59e0b', label: 'Staging' },
+  prod: { color: '#10b981', label: 'Production' }
+};
 
 function buildApiUrl(path) {
   const base = API_BASE_URL.replace(/\/$/, '');
@@ -276,7 +281,6 @@ function normalizeProjectState(rawState) {
 
     merged.cloudflare.environments[envName] = envCloudflare;
     merged.routing[`${envName}_hostname`] = buildHostname(envCloudflare.subdomain, envCloudflare.base_domain);
-
     merged.env[envName] = deepMerge(defaultProjectState().env[envName], merged.env[envName] || {});
     merged.secrets[envName] = deepMerge(defaultProjectState().secrets[envName], merged.secrets[envName] || {});
     merged.targets[envName] = deepMerge(defaultProjectState().targets[envName], merged.targets[envName] || {});
@@ -300,6 +304,7 @@ function readStoredState() {
 
 function App() {
   const [activeEnv, setActiveEnv] = useState('dev');
+  const [prodActiveColor, setProdActiveColor] = useState('blue');
   const [projectState, setProjectState] = useState(defaultProjectState);
   const [logs, setLogs] = useState([]);
   const [downloadUrl, setDownloadUrl] = useState('');
@@ -446,12 +451,26 @@ function App() {
     }
   }
 
+  async function handleTrafficSwitch(color) {
+    setProdActiveColor(color);
+    try {
+      await fetch(buildApiUrl('/traffic/switch'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_color: color })
+      });
+    } catch (error) {
+      setLogs((currentLogs) => [...currentLogs, `Traffic switch failed: ${error.message}`]);
+    }
+  }
+
+  const currentMeta = ENVIRONMENT_META[activeEnv];
   const currentCloudflare = projectState.cloudflare.environments[activeEnv];
   const currentTarget = projectState.targets[activeEnv];
   const currentRuntimeEnv = projectState.env[activeEnv];
-  const currentHostname = projectState.routing[`${activeEnv}_hostname`];
-  const currentAllowedIps = projectState.access[`${activeEnv}_allowed_source_ips`];
   const currentSecrets = projectState.secrets[activeEnv];
+  const currentAllowedIps = projectState.access[`${activeEnv}_allowed_source_ips`];
+  const currentHostname = projectState.routing[`${activeEnv}_hostname`];
   const prodExampleBlock = [
     'APP_ENV=prod',
     'APP_DISPLAY_NAME=Repo Example Prod',
@@ -459,59 +478,107 @@ function App() {
     'NODE_ENV=production'
   ].join('\n');
 
-  const diagramCode = `
-flowchart LR
-  classDef focus fill:#1d4ed8,stroke:#1d4ed8,color:#ffffff
-  classDef card fill:#f8fafc,stroke:#cbd5e1,color:#0f172a
-  UI["idea.rnen.kr\\nProject State UI"] --> GitOps["GitOps input\\n${projectState.argo.gitops_repo_path}/${activeEnv}"]
-  GitOps --> Argo["Argo CD\\n${projectState.argo.project_name}"]
-  Argo --> NKS["Ncloud NKS\\n${currentTarget.ncloud.cluster_name}"]
-  CF["Cloudflare Tunnel\\n${currentHostname || 'hostname pending'}"] --> Caddy["Platform Caddy\\n${projectState.routing.backend_base_path} => ${projectState.routing.backend_service_name}"]
-  NKS --> Caddy
-  Caddy --> Frontend["${projectState.routing.entry_service_name}\\nservice :${currentTarget.service_port}"]
-  Caddy --> Backend["${projectState.routing.backend_service_name}\\nservice /api"]
-  Backend --> DB["db service"]
-  class CF,NKS focus
-  class UI,GitOps,Argo,Caddy,Frontend,Backend,DB card
+  const diagramCode = `%%{init: {
+    'theme': 'base',
+    'themeVariables': {
+      'fontSize': '15px',
+      'fontFamily': 'Pretendard Variable, Pretendard, SUIT Variable, SUIT, Noto Sans KR, sans-serif',
+      'primaryColor': '#ffffff',
+      'primaryTextColor': '#0f172a',
+      'lineColor': '#64748b',
+      'tertiaryColor': '#f8fafc'
+    },
+    'flowchart': {
+      'htmlLabels': true,
+      'curve': 'basis',
+      'nodeSpacing': 60,
+      'rankSpacing': 90,
+      'padding': 30
+    }
+  }}%%
+  graph LR
+  classDef clusterBox fill:#f8fafc,stroke:${currentMeta.color},stroke-width:2px,stroke-dasharray: 5 5,rx:10,ry:10;
+  classDef nodeStyle fill:#fff,color:#0f172a,stroke:#cbd5e1,stroke-width:2px,rx:8,ry:8,font-weight:bold;
+  classDef activeNode fill:${currentMeta.color},color:#fff,stroke-width:0px,rx:8,ry:8,font-weight:bold;
+
+  subgraph External [Cloudflare Edge]
+    User((User)) --> CF((Tunnel<br/>${currentHostname || 'hostname pending'}))
+  end
+
+  subgraph Platform [idea Control Plane]
+    CF --> Caddy["Platform Caddy<br/>${projectState.routing.backend_base_path} -> ${projectState.routing.backend_service_name}"]
+    GitOps["Argo CD<br/>${projectState.argo.project_name}"] --> NKS
+
+    subgraph NKS [Ncloud NKS: ${currentTarget.ncloud.cluster_name}]
+      ${activeEnv === 'prod'
+        ? `
+        Caddy -->|Active| Blue["Frontend Slot: BLUE"]
+        Caddy -.->|Standby| Green["Frontend Slot: GREEN"]
+        Blue --> Api["Backend Service<br/>${projectState.routing.backend_service_name}"]
+        Green --> Api
+      `
+        : `
+        Caddy --> Frontend["Entry Service<br/>${projectState.routing.entry_service_name}"]
+        Frontend --> Api["Backend Service<br/>${projectState.routing.backend_service_name}"]
+      `}
+      Api --> DB["db service"]
+    end
+  end
+
+  class External,Platform,NKS clusterBox;
+  class User,CF,Caddy,GitOps,Frontend,Api,DB,Blue,Green nodeStyle;
+  ${activeEnv === 'prod' ? `class ${prodActiveColor === 'blue' ? 'Blue' : 'Green'} activeNode;` : 'class Frontend activeNode;'}
 `;
 
   return (
-    <div className="app-shell">
-      <header className="hero-bar">
-        <div>
-          <p className="eyebrow">IDEA Control Plane</p>
-          <h1>Repo Project State Editor</h1>
-        </div>
-        <div className="hero-status">
-          <span className="pill">{stateSource}</span>
-          <span className="status-text">{statusMessage || 'Ready'}</span>
+    <div className="app-container">
+      <header className="app-header">
+        <h1>IDEA Platform <span className="version-tag">Project State</span></h1>
+        <div className="header-right-status">
+          <span className="live-status">
+            <span className="status-dot green"></span>
+            {statusMessage || `State source: ${stateSource}`}
+          </span>
         </div>
       </header>
 
-      <div className="workspace">
-        <section className="control-panel">
-          <div className="panel-card">
-            <div className="section-heading">
-              <h2>App Repository</h2>
-              <p>All environments inherit this repository and git ref.</p>
+      <div className="content-layout">
+        <aside className="sidebar">
+          <h3 className="sidebar-title">환경 및 GitOps 설정</h3>
+
+          <div className="config-card global-config-card">
+            <div className="form-section-title">App Repository</div>
+            <p className="scope-note">Applies to dev, stage, and prod.</p>
+
+            <div className="form-group">
+              <label>Project Name</label>
+              <input
+                type="text"
+                value={projectState.project.name}
+                onChange={(event) =>
+                  updateProjectState((next) => {
+                    next.project.name = event.target.value;
+                  })
+                }
+              />
             </div>
 
-            <div className="field-grid">
-              <label className="field">
-                <span>App Repository URL</span>
-                <input
-                  type="text"
-                  value={projectState.project.app_repo_url}
-                  onChange={(event) =>
-                    updateProjectState((next) => {
-                      next.project.app_repo_url = event.target.value;
-                    })
-                  }
-                />
-              </label>
+            <div className="form-group">
+              <label>App Repository URL</label>
+              <input
+                type="text"
+                value={projectState.project.app_repo_url}
+                onChange={(event) =>
+                  updateProjectState((next) => {
+                    next.project.app_repo_url = event.target.value;
+                  })
+                }
+              />
+            </div>
 
-              <label className="field">
-                <span>Git Ref</span>
+            <div className="double-input-row">
+              <div className="form-group">
+                <label>Git Ref</label>
                 <input
                   type="text"
                   value={projectState.project.git_ref}
@@ -521,23 +588,9 @@ flowchart LR
                     })
                   }
                 />
-              </label>
-
-              <label className="field">
-                <span>Project Name</span>
-                <input
-                  type="text"
-                  value={projectState.project.name}
-                  onChange={(event) =>
-                    updateProjectState((next) => {
-                      next.project.name = event.target.value;
-                    })
-                  }
-                />
-              </label>
-
-              <label className="field">
-                <span>Repo Access Secret Ref</span>
+              </div>
+              <div className="form-group">
+                <label>Repo Access Secret Ref</label>
                 <input
                   type="text"
                   value={projectState.project.repo_access_secret_ref}
@@ -547,77 +600,70 @@ flowchart LR
                     })
                   }
                 />
-              </label>
+              </div>
+            </div>
+
+            <div className="form-section-title">Build Input</div>
+            <div className="double-input-row">
+              <div className="form-group">
+                <label>Frontend Context</label>
+                <input
+                  type="text"
+                  value={projectState.build.frontend_context}
+                  onChange={(event) =>
+                    updateProjectState((next) => {
+                      next.build.frontend_context = event.target.value;
+                    })
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label>Frontend Dockerfile</label>
+                <input
+                  type="text"
+                  value={projectState.build.frontend_dockerfile_path}
+                  onChange={(event) =>
+                    updateProjectState((next) => {
+                      next.build.frontend_dockerfile_path = event.target.value;
+                    })
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="double-input-row">
+              <div className="form-group">
+                <label>Backend Context</label>
+                <input
+                  type="text"
+                  value={projectState.build.backend_context}
+                  onChange={(event) =>
+                    updateProjectState((next) => {
+                      next.build.backend_context = event.target.value;
+                    })
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label>Backend Dockerfile</label>
+                <input
+                  type="text"
+                  value={projectState.build.backend_dockerfile_path}
+                  onChange={(event) =>
+                    updateProjectState((next) => {
+                      next.build.backend_dockerfile_path = event.target.value;
+                    })
+                  }
+                />
+              </div>
             </div>
           </div>
 
-          <div className="panel-card">
-            <div className="section-heading">
-              <h2>Platform Routing</h2>
-              <p>Keep repo internal nginx untouched and route through platform Caddy.</p>
-            </div>
-
-            <div className="field-grid">
-              <label className="field">
-                <span>Entry Service</span>
-                <input
-                  type="text"
-                  value={projectState.routing.entry_service_name}
-                  onChange={(event) =>
-                    updateProjectState((next) => {
-                      next.routing.entry_service_name = event.target.value;
-                    })
-                  }
-                />
-              </label>
-
-              <label className="field">
-                <span>Backend Service</span>
-                <input
-                  type="text"
-                  value={projectState.routing.backend_service_name}
-                  onChange={(event) =>
-                    updateProjectState((next) => {
-                      next.routing.backend_service_name = event.target.value;
-                    })
-                  }
-                />
-              </label>
-
-              <label className="field">
-                <span>Backend Base Path</span>
-                <input
-                  type="text"
-                  value={projectState.routing.backend_base_path}
-                  onChange={(event) =>
-                    updateProjectState((next) => {
-                      next.routing.backend_base_path = event.target.value;
-                    })
-                  }
-                />
-              </label>
-
-              <label className="field">
-                <span>Healthcheck Path</span>
-                <input
-                  type="text"
-                  value={projectState.delivery.healthcheck_path}
-                  onChange={(event) =>
-                    updateProjectState((next) => {
-                      next.delivery.healthcheck_path = event.target.value;
-                    })
-                  }
-                />
-              </label>
-            </div>
-          </div>
-
-          <div className="env-tabs">
+          <div className="env-selector">
             {ENVIRONMENTS.map((envName) => (
               <button
                 key={envName}
-                type="button"
-                className={activeEnv === envName ? 'active' : ''}
+                className={`env-btn ${activeEnv === envName ? `selected ${envName}` : ''}`}
                 onClick={() => setActiveEnv(envName)}
               >
                 {envName.toUpperCase()}
@@ -625,286 +671,339 @@ flowchart LR
             ))}
           </div>
 
-          <div className="panel-card">
-            <div className="section-heading">
-              <h2>{activeEnv.toUpperCase()} Environment</h2>
-              <p>Cloudflare hostname, runtime env, allowlist, and NKS target.</p>
-            </div>
+          <div className="config-card" style={{ borderColor: currentMeta.color }}>
+            <div className="form-section-title">Cloudflare Reconciler</div>
 
-            <div className="subsection">
-              <h3>Cloudflare Reconciler</h3>
-              <div className="field-grid">
-                <label className="field">
-                  <span>Account ID</span>
-                  <input
-                    type="text"
-                    value={projectState.cloudflare.account_id}
-                    onChange={(event) =>
-                      updateProjectState((next) => {
-                        next.cloudflare.account_id = event.target.value;
-                      })
-                    }
-                  />
-                </label>
-
-                <label className="field">
-                  <span>Zone ID</span>
-                  <input
-                    type="text"
-                    value={projectState.cloudflare.zone_id}
-                    onChange={(event) =>
-                      updateProjectState((next) => {
-                        next.cloudflare.zone_id = event.target.value;
-                      })
-                    }
-                  />
-                </label>
-
-                <label className="field">
-                  <span>API Token Secret Ref</span>
-                  <input
-                    type="text"
-                    value={projectState.cloudflare.api_token_secret_ref}
-                    onChange={(event) =>
-                      updateProjectState((next) => {
-                        next.cloudflare.api_token_secret_ref = event.target.value;
-                      })
-                    }
-                  />
-                </label>
-
-                <label className="field">
-                  <span>Tunnel Name</span>
-                  <input
-                    type="text"
-                    value={projectState.cloudflare.tunnel_name}
-                    onChange={(event) =>
-                      updateProjectState((next) => {
-                        next.cloudflare.tunnel_name = event.target.value;
-                      })
-                    }
-                  />
-                </label>
-
-                <label className="field">
-                  <span>{activeEnv.toUpperCase()} Subdomain</span>
-                  <input
-                    type="text"
-                    value={currentCloudflare.subdomain}
-                    onChange={(event) =>
-                      updateProjectState((next) => {
-                        next.cloudflare.environments[activeEnv].subdomain = event.target.value;
-                      })
-                    }
-                    placeholder="@, *, repo-example-dev"
-                  />
-                </label>
-
-                <label className="field">
-                  <span>{activeEnv.toUpperCase()} Base Domain</span>
-                  <input
-                    type="text"
-                    value={currentCloudflare.base_domain}
-                    onChange={(event) =>
-                      updateProjectState((next) => {
-                        next.cloudflare.environments[activeEnv].base_domain = event.target.value;
-                      })
-                    }
-                    placeholder="rnen.kr"
-                  />
-                </label>
+            <div className="double-input-row">
+              <div className="form-group">
+                <label>Cloudflare Account ID</label>
+                <input
+                  type="text"
+                  value={projectState.cloudflare.account_id}
+                  onChange={(event) =>
+                    updateProjectState((next) => {
+                      next.cloudflare.account_id = event.target.value;
+                    })
+                  }
+                />
               </div>
-
-              <div className="preview-banner">
-                <strong>Hostname Preview</strong>
-                <span>{currentHostname || 'base domain required'}</span>
+              <div className="form-group">
+                <label>Cloudflare Zone ID</label>
+                <input
+                  type="text"
+                  value={projectState.cloudflare.zone_id}
+                  onChange={(event) =>
+                    updateProjectState((next) => {
+                      next.cloudflare.zone_id = event.target.value;
+                    })
+                  }
+                />
               </div>
             </div>
 
-            <div className="subsection">
-              <h3>Runtime</h3>
-              <div className="field-grid compact-grid">
-                <label className="field">
-                  <span>Namespace</span>
-                  <input
-                    type="text"
-                    value={currentTarget.namespace}
-                    onChange={(event) =>
-                      updateProjectState((next) => {
-                        next.targets[activeEnv].namespace = event.target.value;
-                      })
-                    }
-                  />
-                </label>
+            <div className="double-input-row">
+              <div className="form-group">
+                <label>API Token Secret Ref</label>
+                <input
+                  type="text"
+                  value={projectState.cloudflare.api_token_secret_ref}
+                  onChange={(event) =>
+                    updateProjectState((next) => {
+                      next.cloudflare.api_token_secret_ref = event.target.value;
+                    })
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label>Tunnel Name</label>
+                <input
+                  type="text"
+                  value={projectState.cloudflare.tunnel_name}
+                  onChange={(event) =>
+                    updateProjectState((next) => {
+                      next.cloudflare.tunnel_name = event.target.value;
+                    })
+                  }
+                />
+              </div>
+            </div>
 
-                <label className="field">
-                  <span>NKS Cluster</span>
-                  <input
-                    type="text"
-                    value={currentTarget.ncloud.cluster_name}
-                    onChange={(event) =>
-                      updateProjectState((next) => {
-                        next.targets[activeEnv].ncloud.cluster_name = event.target.value;
-                      })
-                    }
-                  />
-                </label>
+            <div className="double-input-row">
+              <div className="form-group">
+                <label>{activeEnv.toUpperCase()} Subdomain</label>
+                <input
+                  type="text"
+                  value={currentCloudflare.subdomain}
+                  onChange={(event) =>
+                    updateProjectState((next) => {
+                      next.cloudflare.environments[activeEnv].subdomain = event.target.value;
+                    })
+                  }
+                  placeholder="@, *, repo-example-dev"
+                />
+              </div>
+              <div className="form-group">
+                <label>{activeEnv.toUpperCase()} Base Domain</label>
+                <input
+                  type="text"
+                  value={currentCloudflare.base_domain}
+                  onChange={(event) =>
+                    updateProjectState((next) => {
+                      next.cloudflare.environments[activeEnv].base_domain = event.target.value;
+                    })
+                  }
+                  placeholder="rnen.kr"
+                />
+              </div>
+            </div>
 
-                <label className="field">
-                  <span>Service Port</span>
-                  <input
-                    type="number"
-                    value={currentTarget.service_port}
-                    onChange={(event) =>
-                      updateProjectState((next) => {
-                        next.targets[activeEnv].service_port = Number(event.target.value || '80');
-                      })
-                    }
-                  />
-                </label>
+            <div className="hostname-preview">
+              <span>Hostname Preview</span>
+              <strong>{currentHostname || 'base domain required'}</strong>
+            </div>
 
-                <label className="field">
-                  <span>Blue Green</span>
-                  <select
-                    value={projectState.delivery.prod_blue_green_enabled ? 'enabled' : 'disabled'}
-                    onChange={(event) =>
-                      updateProjectState((next) => {
-                        next.delivery.prod_blue_green_enabled = event.target.value === 'enabled';
-                      })
-                    }
+            <div className="form-section-title">Argo CD / Target</div>
+
+            <div className="double-input-row">
+              <div className="form-group">
+                <label>Argo Project</label>
+                <input
+                  type="text"
+                  value={projectState.argo.project_name}
+                  onChange={(event) =>
+                    updateProjectState((next) => {
+                      next.argo.project_name = event.target.value;
+                    })
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label>GitOps Path</label>
+                <input
+                  type="text"
+                  value={projectState.argo.gitops_repo_path}
+                  onChange={(event) =>
+                    updateProjectState((next) => {
+                      next.argo.gitops_repo_path = event.target.value;
+                    })
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="double-input-row">
+              <div className="form-group">
+                <label>NKS Cluster</label>
+                <input
+                  type="text"
+                  value={currentTarget.ncloud.cluster_name}
+                  onChange={(event) =>
+                    updateProjectState((next) => {
+                      next.targets[activeEnv].ncloud.cluster_name = event.target.value;
+                    })
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label>Namespace</label>
+                <input
+                  type="text"
+                  value={currentTarget.namespace}
+                  onChange={(event) =>
+                    updateProjectState((next) => {
+                      next.targets[activeEnv].namespace = event.target.value;
+                    })
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="double-input-row">
+              <div className="form-group">
+                <label>Service Port</label>
+                <input
+                  type="number"
+                  value={currentTarget.service_port}
+                  onChange={(event) =>
+                    updateProjectState((next) => {
+                      next.targets[activeEnv].service_port = Number(event.target.value || '80');
+                    })
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label>Argo CD Access</label>
+                <input type="text" value={projectState.argo.access_hint} readOnly />
+              </div>
+            </div>
+
+            {activeEnv === 'prod' && (
+              <div className="form-group animate-fade">
+                <label>Blue-Green Traffic Control</label>
+                <div className="env-selector inline-selector">
+                  <button
+                    className={`env-btn ${prodActiveColor === 'blue' ? 'selected dev' : ''}`}
+                    onClick={() => handleTrafficSwitch('blue')}
                   >
-                    <option value="enabled">enabled</option>
-                    <option value="disabled">disabled</option>
-                  </select>
-                </label>
-              </div>
-
-              <label className="field">
-                <span>{activeEnv.toUpperCase()} Runtime Env</span>
-                <textarea
-                  rows="8"
-                  value={formatKeyValueBlock(currentRuntimeEnv)}
-                  onChange={(event) =>
-                    updateProjectState((next) => {
-                      next.env[activeEnv] = parseKeyValueBlock(event.target.value);
-                    })
-                  }
-                />
-              </label>
-
-              <label className="field">
-                <span>{activeEnv.toUpperCase()} Secret Refs</span>
-                <textarea
-                  rows="4"
-                  value={formatKeyValueBlock(currentSecrets)}
-                  onChange={(event) =>
-                    updateProjectState((next) => {
-                      next.secrets[activeEnv] = parseKeyValueBlock(event.target.value);
-                    })
-                  }
-                />
-              </label>
-
-              <label className="field">
-                <span>{activeEnv.toUpperCase()} Allowed Source IPs</span>
-                <textarea
-                  rows="4"
-                  value={formatLines(currentAllowedIps)}
-                  onChange={(event) =>
-                    updateProjectState((next) => {
-                      next.access[`${activeEnv}_allowed_source_ips`] = parseLines(event.target.value);
-                    })
-                  }
-                />
-              </label>
-
-              {activeEnv === 'prod' && (
-                <div className="example-block">
-                  <p>PROD RUNTIME ENV example</p>
-                  <pre>{prodExampleBlock}</pre>
+                    BLUE (Active)
+                  </button>
+                  <button
+                    className={`env-btn ${prodActiveColor === 'green' ? 'selected prod' : ''}`}
+                    onClick={() => handleTrafficSwitch('green')}
+                  >
+                    GREEN (Standby)
+                  </button>
                 </div>
-              )}
+              </div>
+            )}
+
+            <div className="form-section-title">{activeEnv.toUpperCase()} Runtime</div>
+            <div className="form-group">
+              <label>{activeEnv.toUpperCase()} Runtime Env (.env)</label>
+              <textarea
+                rows="6"
+                value={formatKeyValueBlock(currentRuntimeEnv)}
+                onChange={(event) =>
+                  updateProjectState((next) => {
+                    next.env[activeEnv] = parseKeyValueBlock(event.target.value);
+                  })
+                }
+              />
+            </div>
+
+            {activeEnv === 'prod' && (
+              <div className="helper-box">
+                <span>PROD RUNTIME ENV example</span>
+                <pre>{prodExampleBlock}</pre>
+              </div>
+            )}
+
+            <div className="form-group">
+              <label>{activeEnv.toUpperCase()} Secret Refs</label>
+              <textarea
+                rows="4"
+                value={formatKeyValueBlock(currentSecrets)}
+                onChange={(event) =>
+                  updateProjectState((next) => {
+                    next.secrets[activeEnv] = parseKeyValueBlock(event.target.value);
+                  })
+                }
+              />
+            </div>
+
+            <div className="form-group">
+              <label>{activeEnv.toUpperCase()} Allowed Source IPs</label>
+              <textarea
+                rows="4"
+                value={formatLines(currentAllowedIps)}
+                onChange={(event) =>
+                  updateProjectState((next) => {
+                    next.access[`${activeEnv}_allowed_source_ips`] = parseLines(event.target.value);
+                  })
+                }
+              />
             </div>
           </div>
 
-          <div className="actions-row">
-            <button type="button" className="secondary-action" onClick={handleSave} disabled={isSaving || isDeploying}>
-              {isSaving ? 'Saving...' : 'Save Project State'}
+          <div className="action-row">
+            <button className="secondary-btn" onClick={handleSave} disabled={isSaving || isDeploying}>
+              {isSaving ? 'SAVING...' : 'SAVE STATE'}
             </button>
-            <button type="button" className="primary-action" onClick={handleDeploy} disabled={isSaving || isDeploying}>
-              {isDeploying ? 'Generating...' : `Generate ${activeEnv.toUpperCase()} Bundle`}
+
+            <button
+              className="main-deploy-btn"
+              style={{ backgroundColor: currentMeta.color }}
+              onClick={handleDeploy}
+              disabled={isSaving || isDeploying}
+            >
+              {isDeploying ? 'GENERATING...' : `GENERATE ${activeEnv.toUpperCase()} BUNDLE`}
             </button>
           </div>
 
           {downloadUrl && (
-            <a className="download-link" href={downloadUrl} download>
-              Download generated bundle
+            <a href={downloadUrl} download className="download-btn-link">
+              DOWNLOAD GITOPS BUNDLE
             </a>
           )}
-        </section>
+        </aside>
 
-        <section className="inspector-panel">
-          <div className="summary-grid">
-            <article className="summary-card">
-              <span className="summary-label">Selected Env</span>
-              <strong>{activeEnv.toUpperCase()}</strong>
-              <p>{currentHostname || 'Hostname pending'}</p>
-            </article>
+        <main className="main-view">
+          <div className="view-header">
+            <h3>Infrastructure Topology (Ncloud NKS)</h3>
+            <span className="live-badge">{stateSource.toUpperCase()} PROJECT STATE</span>
+          </div>
 
-            <article className="summary-card">
-              <span className="summary-label">Repository</span>
+          <div className="topology-summary">
+            <div className="summary-tile">
+              <span>Repository</span>
               <strong>{projectState.project.git_ref}</strong>
-              <p>{projectState.project.app_repo_url}</p>
-            </article>
-
-            <article className="summary-card">
-              <span className="summary-label">Argo CD Access</span>
-              <strong>{projectState.argo.project_name}</strong>
-              <p>{projectState.argo.access_hint}</p>
-            </article>
-
-            <article className="summary-card">
-              <span className="summary-label">NKS Namespace</span>
-              <strong>{currentTarget.namespace}</strong>
-              <p>{currentTarget.ncloud.cluster_name}</p>
-            </article>
-          </div>
-
-          <div className="panel-card diagram-card">
-            <div className="section-heading">
-              <h2>Delivery Topology</h2>
-              <p>Cloudflare Tunnel, Caddy, Argo CD, and NKS for the selected environment.</p>
+              <small>{projectState.project.app_repo_url}</small>
             </div>
-            <div className="diagram-surface">
-              <MermaidViewer chartCode={diagramCode} />
+            <div className="summary-tile">
+              <span>Environment</span>
+              <strong style={{ color: currentMeta.color }}>{currentMeta.label}</strong>
+              <small>{currentHostname || 'hostname pending'}</small>
+            </div>
+            <div className="summary-tile">
+              <span>NKS</span>
+              <strong>{currentTarget.ncloud.cluster_name}</strong>
+              <small>{currentTarget.namespace}</small>
             </div>
           </div>
 
-          <div className="panel-card">
-            <div className="section-heading">
-              <h2>Argo CD</h2>
-              <p>Current access path until a public route is added.</p>
-            </div>
-            <pre className="inline-command">{projectState.argo.access_hint}</pre>
+          <div className="mermaid-wrapper">
+            <MermaidViewer chartCode={diagramCode} />
           </div>
 
-          <div className="panel-card">
-            <div className="section-heading">
-              <h2>Console</h2>
-              <p>Backend load, save, and bundle generation logs.</p>
-            </div>
-
-            <div className="console-panel">
+          <div className="console-wrapper">
+            <div className="console-header">PROJECT_STATE_LOG_STREAM</div>
+            <div className="console-content">
+              {logs.length === 0 && <span style={{ color: '#444' }}>Waiting for project state signal...</span>}
               {logs.map((log, index) => (
-                <div key={`${log}-${index}`} className="console-line">
-                  <span className="console-prefix">&gt;&gt;</span>
-                  <span>{log}</span>
+                <div key={`${log}-${index}`}>
+                  <span style={{ color: '#555' }}>&gt;&gt;&gt;</span> {log}
                 </div>
               ))}
               <div ref={logEndRef} />
             </div>
           </div>
-        </section>
+
+          <div className="status-bar">
+            <p>
+              ● Environment:{' '}
+              <span style={{ color: currentMeta.color, fontWeight: 'bold' }}>{activeEnv.toUpperCase()}</span>
+            </p>
+            <p>
+              ● Service URL:{' '}
+              {currentHostname ? (
+                <a
+                  href={`https://${currentHostname}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ color: currentMeta.color, fontWeight: 'bold', marginLeft: '5px' }}
+                >
+                  {currentHostname} ↗
+                </a>
+              ) : (
+                <span style={{ color: '#666', marginLeft: '5px' }}>도메인을 입력해 주세요</span>
+              )}
+            </p>
+            <p>
+              ● Source: <strong>{stateSource}</strong>
+            </p>
+            <p>
+              ● Cluster: <strong>{currentTarget.ncloud.cluster_name}</strong>
+            </p>
+            {activeEnv === 'prod' && (
+              <p>
+                ● Active Slot:{' '}
+                <strong style={{ color: prodActiveColor === 'blue' ? '#3b82f6' : '#10b981' }}>
+                  {prodActiveColor.toUpperCase()}
+                </strong>
+              </p>
+            )}
+          </div>
+        </main>
       </div>
     </div>
   );
