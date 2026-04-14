@@ -18,6 +18,12 @@ function buildApiUrl(path) {
   return `${base}${path}`;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
 function deepMerge(base, override) {
   if (Array.isArray(base)) {
     return Array.isArray(override) ? [...override] : [...base];
@@ -395,7 +401,11 @@ function App() {
   const [prodActiveColor, setProdActiveColor] = useState('blue');
   const [projectState, setProjectState] = useState(defaultProjectState);
   const [logs, setLogs] = useState([]);
-  const [downloadUrl, setDownloadUrl] = useState('');
+  const [bundleDownloadUrls, setBundleDownloadUrls] = useState({
+    dev: '',
+    stage: '',
+    prod: ''
+  });
   const [stateSource, setStateSource] = useState('loading');
   const [isReady, setIsReady] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -534,30 +544,73 @@ function App() {
   async function handleDeploy() {
     setIsDeploying(true);
     setStatusMessage('');
-    setDownloadUrl('');
 
     try {
       const saved = await persistProjectState();
-      const response = await fetch(buildApiUrl('/deploy'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          selected_env: activeEnv,
-          project_state: saved
-        })
-      });
-
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.detail || `deploy failed with ${response.status}`);
-      }
-
+      const payload = await deployEnvironment(saved, activeEnv);
       setLogs(payload.logs || ['Bundle generated.']);
-      setDownloadUrl(payload.download_url || '');
+      setBundleDownloadUrls((current) => ({
+        ...current,
+        [activeEnv]: payload.download_url || ''
+      }));
       setStatusMessage(payload.message || 'Bundle generated.');
     } catch (error) {
       setLogs([`Deploy failed: ${error.message}`]);
       setStatusMessage(`Deploy failed: ${error.message}`);
+    } finally {
+      setIsDeploying(false);
+    }
+  }
+
+  async function deployEnvironment(savedState, envName) {
+    const response = await fetch(buildApiUrl('/deploy'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        selected_env: envName,
+        project_state: savedState
+      })
+    });
+
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.detail || `deploy failed with ${response.status}`);
+    }
+
+    return payload;
+  }
+
+  async function handleDeployAll() {
+    setIsDeploying(true);
+    setStatusMessage('');
+    setBundleDownloadUrls({
+      dev: '',
+      stage: '',
+      prod: ''
+    });
+
+    try {
+      const saved = await persistProjectState();
+      const nextDownloadUrls = {
+        dev: '',
+        stage: '',
+        prod: ''
+      };
+      const combinedLogs = ['Starting bulk bundle generation for DEV, STAGE, PROD.'];
+
+      for (const envName of ENVIRONMENTS) {
+        combinedLogs.push(`Generating ${envName.toUpperCase()} bundle...`);
+        const payload = await deployEnvironment(saved, envName);
+        combinedLogs.push(...(payload.logs || [`${envName.toUpperCase()} bundle generated.`]));
+        nextDownloadUrls[envName] = payload.download_url || '';
+      }
+
+      setBundleDownloadUrls(nextDownloadUrls);
+      setLogs(combinedLogs);
+      setStatusMessage('DEV / STAGE / PROD bundle generation completed.');
+    } catch (error) {
+      setLogs((currentLogs) => [...currentLogs, `Bulk generate failed: ${error.message}`]);
+      setStatusMessage(`Bulk generate failed: ${error.message}`);
     } finally {
       setIsDeploying(false);
     }
@@ -569,7 +622,7 @@ function App() {
 
     try {
       const saved = await persistProjectState();
-      const response = await fetch(buildApiUrl('/provision-target'), {
+      const response = await fetch(buildApiUrl('/provision-target/start'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -584,19 +637,42 @@ function App() {
         throw new Error(payload.detail || `provision-target failed with ${response.status}`);
       }
 
-      const nextState = normalizeProjectState(payload.project_state || saved);
-      setProjectState(nextState);
-      setStateSource('backend');
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
-      setProvisionArtifactUrls((current) => ({
-        ...current,
-        [activeEnv]: {
-          kubeconfig: payload.kubeconfig_download_url || '',
-          argocd: payload.argocd_cluster_secret_download_url || ''
+      setLogs(payload.logs || [`Started ${activeEnv.toUpperCase()} provisioning.`]);
+      setStatusMessage(payload.message || `${activeEnv.toUpperCase()} provisioning started.`);
+
+      while (true) {
+        await sleep(1000);
+        const statusResponse = await fetch(buildApiUrl(`/provision-target/status/${payload.task_id}`), {
+          cache: 'no-store'
+        });
+        const statusPayload = await statusResponse.json();
+        if (!statusResponse.ok) {
+          throw new Error(statusPayload.detail || `provision status failed with ${statusResponse.status}`);
         }
-      }));
-      setLogs(payload.logs || ['Provisioning completed.']);
-      setStatusMessage(payload.message || `${activeEnv.toUpperCase()} target provisioned.`);
+
+        setLogs(statusPayload.logs || []);
+
+        if (statusPayload.status === 'completed') {
+          const result = statusPayload.result || {};
+          const nextState = normalizeProjectState(result.project_state || saved);
+          setProjectState(nextState);
+          setStateSource('backend');
+          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
+          setProvisionArtifactUrls((current) => ({
+            ...current,
+            [activeEnv]: {
+              kubeconfig: result.kubeconfig_download_url || '',
+              argocd: result.argocd_cluster_secret_download_url || ''
+            }
+          }));
+          setStatusMessage(result.message || `${activeEnv.toUpperCase()} target provisioned.`);
+          break;
+        }
+
+        if (statusPayload.status === 'failed') {
+          throw new Error(statusPayload.error || 'provisioning task failed');
+        }
+      }
     } catch (error) {
       setLogs([`Provisioning failed: ${error.message}`]);
       setStatusMessage(`Provisioning failed: ${error.message}`);
@@ -1318,6 +1394,14 @@ function App() {
             </button>
 
             <button
+              className="secondary-btn"
+              onClick={handleDeployAll}
+              disabled={isSaving || isDeploying || isProvisioningTarget || isImportingEnv || isExportingEnv}
+            >
+              {isDeploying ? 'GENERATING ALL...' : 'GENERATE ALL BUNDLES'}
+            </button>
+
+            <button
               className="main-deploy-btn"
               style={{ backgroundColor: currentMeta.color }}
               onClick={handleDeploy}
@@ -1342,10 +1426,22 @@ function App() {
             </div>
           )}
 
-          {downloadUrl && (
-            <a href={downloadUrl} download className="download-btn-link">
-              DOWNLOAD GITOPS BUNDLE
+          {bundleDownloadUrls[activeEnv] && (
+            <a href={bundleDownloadUrls[activeEnv]} download className="download-btn-link">
+              DOWNLOAD {activeEnv.toUpperCase()} GITOPS BUNDLE
             </a>
+          )}
+
+          {(bundleDownloadUrls.dev || bundleDownloadUrls.stage || bundleDownloadUrls.prod) && (
+            <div className="action-row">
+              {ENVIRONMENTS.map((envName) =>
+                bundleDownloadUrls[envName] ? (
+                  <a key={envName} href={bundleDownloadUrls[envName]} download className="download-btn-link env-download-link">
+                    DOWNLOAD {envName.toUpperCase()} BUNDLE
+                  </a>
+                ) : null
+              )}
+            </div>
           )}
           </div>
         </aside>

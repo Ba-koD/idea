@@ -1,9 +1,11 @@
 import json
 import os
 import socket
+import threading
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -18,6 +20,8 @@ from provisioning import provision_ncloud_target
 app = FastAPI(title="idea Control Plane API")
 OUTPUT_ROOT = Path("outputs")
 PROJECT_STATE_PATH = OUTPUT_ROOT / "project-state.json"
+PROVISION_TASKS: dict[str, dict] = {}
+PROVISION_TASKS_LOCK = threading.Lock()
 
 app.add_middleware(
     CORSMiddleware,
@@ -68,6 +72,46 @@ def save_project_state(payload: ProjectState | dict) -> dict:
         encoding="utf-8",
     )
     return normalized
+
+
+def create_provision_task(selected_env: str) -> dict:
+    task = {
+        "task_id": uuid4().hex,
+        "selected_env": selected_env,
+        "status": "queued",
+        "logs": [f"Queued {selected_env.upper()} provisioning task."],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "result": None,
+        "error": "",
+    }
+    with PROVISION_TASKS_LOCK:
+        PROVISION_TASKS[task["task_id"]] = task
+    return task
+
+
+def append_provision_log(task_id: str, message: str) -> None:
+    with PROVISION_TASKS_LOCK:
+        task = PROVISION_TASKS.get(task_id)
+        if not task:
+            return
+        task["logs"].append(message)
+        task["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+
+def update_provision_task(task_id: str, **updates: object) -> None:
+    with PROVISION_TASKS_LOCK:
+        task = PROVISION_TASKS.get(task_id)
+        if not task:
+            return
+        task.update(updates)
+        task["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+
+def get_provision_task(task_id: str) -> dict | None:
+    with PROVISION_TASKS_LOCK:
+        task = PROVISION_TASKS.get(task_id)
+        return json.loads(json.dumps(task)) if task else None
 
 
 @app.on_event("startup")
@@ -253,6 +297,86 @@ async def provision_target(req: ProvisionRequest):
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/provision-target/start")
+async def start_provision_target(req: ProvisionRequest):
+    task = create_provision_task(req.selected_env)
+    payload = req.model_dump()
+
+    def run_task() -> None:
+        try:
+            update_provision_task(task["task_id"], status="running")
+            append_provision_log(task["task_id"], "Saving project state to backend.")
+            state = save_project_state(payload["project_state"])
+            append_provision_log(task["task_id"], "Project state saved. Starting provisioning pipeline.")
+            next_state, result = provision_ncloud_target(
+                state,
+                payload["selected_env"],
+                OUTPUT_ROOT,
+                apply=payload["apply"],
+                log_callback=lambda message: append_provision_log(task["task_id"], message),
+            )
+            saved_state = save_project_state(next_state)
+
+            result_payload = {
+                "status": "success",
+                "selected_env": payload["selected_env"],
+                "message": (
+                    f"{payload['selected_env'].upper()} Ncloud target provisioned."
+                    if result["applied"]
+                    else f"{payload['selected_env'].upper()} Ncloud provisioning dry-run generated."
+                ),
+                "project_state": saved_state,
+                "logs": result["logs"],
+                "runtime_dir": result["runtime_dir"],
+                "applied": result["applied"],
+            }
+
+            if result["applied"]:
+                result_payload.update(
+                    {
+                        "cluster_uuid": result["outputs"]["cluster_uuid"],
+                        "cluster_endpoint": result["outputs"]["cluster_endpoint"],
+                        "kubeconfig_download_url": f"/api/download-provision/{saved_state['project']['name']}/{payload['selected_env']}/kubeconfig",
+                        "argocd_cluster_secret_download_url": (
+                            f"/api/download-provision/{saved_state['project']['name']}/{payload['selected_env']}/argocd-cluster-secret"
+                        ),
+                    }
+                )
+            if result.get("warnings"):
+                result_payload["warnings"] = result["warnings"]
+
+            update_provision_task(
+                task["task_id"],
+                status="completed",
+                result=result_payload,
+            )
+        except Exception as exc:
+            append_provision_log(task["task_id"], f"Provisioning failed: {exc}")
+            update_provision_task(
+                task["task_id"],
+                status="failed",
+                error=str(exc),
+            )
+
+    threading.Thread(target=run_task, daemon=True).start()
+
+    return {
+        "status": "accepted",
+        "task_id": task["task_id"],
+        "selected_env": req.selected_env,
+        "message": f"{req.selected_env.upper()} provisioning started.",
+        "logs": task["logs"],
+    }
+
+
+@app.get("/api/provision-target/status/{task_id}")
+async def get_provision_target_status(task_id: str):
+    task = get_provision_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="provision task not found")
+    return task
 
 
 @app.get("/api/healthz")

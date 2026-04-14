@@ -9,7 +9,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from textwrap import dedent
-from typing import Any
+from typing import Any, Callable
 from urllib.error import HTTPError
 from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
@@ -92,7 +92,7 @@ TERRAFORM_MAIN_TF = dedent(
       use_existing_node_subnet       = !local.use_existing_cluster && trimspace(var.existing_node_subnet_no) != "" && can(regex("^[0-9]+$", var.existing_node_subnet_no))
       use_existing_lb_private_subnet = !local.use_existing_cluster && trimspace(var.existing_lb_private_subnet_no) != "" && can(regex("^[0-9]+$", var.existing_lb_private_subnet_no))
       use_existing_lb_public_subnet  = !local.use_existing_cluster && trimspace(var.existing_lb_public_subnet_no) != "" && can(regex("^[0-9]+$", var.existing_lb_public_subnet_no))
-      has_existing_login_key         = length(data.ncloud_login_key.existing.login_key_list) > 0
+      has_existing_login_key         = try(length(data.ncloud_login_key.existing.login_key_list), 0) > 0
     }
 
     data "ncloud_login_key" "existing" {
@@ -317,15 +317,42 @@ def looks_like_placeholder(value: Any) -> bool:
     return not text or text.startswith("replace-me") or text in {"changeme", "change-me", "placeholder", "todo"}
 
 
-def run_command(command: list[str], workdir: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+def run_command(
+    command: list[str],
+    workdir: Path,
+    env: dict[str, str],
+    log_callback: Callable[[str], None] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    if log_callback is None:
+        return subprocess.run(
+            command,
+            cwd=str(workdir),
+            env=env,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+
+    process = subprocess.Popen(
         command,
         cwd=str(workdir),
         env=env,
-        check=False,
         text=True,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
     )
+    output_lines: list[str] = []
+    log_callback(f"$ {' '.join(command)}")
+
+    assert process.stdout is not None
+    for line in process.stdout:
+        cleaned = line.rstrip()
+        output_lines.append(line)
+        if cleaned:
+            log_callback(cleaned)
+
+    returncode = process.wait()
+    return subprocess.CompletedProcess(command, returncode, stdout="".join(output_lines), stderr="")
 
 
 def resolve_secret_value(project_state: dict[str, Any], secret_ref: str) -> str:
@@ -939,7 +966,13 @@ def write_runtime_terraform_files(runtime_dir: Path, tfvars: dict[str, Any]) -> 
     )
 
 
-def provision_ncloud_target(project_state: dict[str, Any], selected_env: str, output_root: Path, apply: bool = True) -> tuple[dict[str, Any], dict[str, Any]]:
+def provision_ncloud_target(
+    project_state: dict[str, Any],
+    selected_env: str,
+    output_root: Path,
+    apply: bool = True,
+    log_callback: Callable[[str], None] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     state = deepcopy(project_state)
     project = state["project"]
     target = state["targets"][selected_env]
@@ -978,21 +1011,28 @@ def provision_ncloud_target(project_state: dict[str, Any], selected_env: str, ou
         "TF_IN_AUTOMATION": "1",
     }
 
-    logs = [
-        f"Prepared Terraform runtime in {runtime_dir}.",
-        f"Ncloud target cluster_name={tfvars['cluster_name']} zone={tfvars['zone']} region={tfvars['region']}.",
-        f"Existing cluster_uuid={tfvars['existing_cluster_uuid'] or '(create new)'} vpc_no={tfvars['existing_vpc_no'] or '(create new)'}.",
-    ]
+    logs: list[str] = []
 
-    init_result = run_command([terraform_bin, "init", "-backend=false"], runtime_dir, command_env)
+    def emit(message: str) -> None:
+        logs.append(message)
+        if log_callback is not None:
+            log_callback(message)
+
+    emit(f"Prepared Terraform runtime in {runtime_dir}.")
+    emit(f"Ncloud target cluster_name={tfvars['cluster_name']} zone={tfvars['zone']} region={tfvars['region']}.")
+    emit(f"Existing cluster_uuid={tfvars['existing_cluster_uuid'] or '(create new)'} vpc_no={tfvars['existing_vpc_no'] or '(create new)'}.")
+    emit("Running terraform init.")
+
+    init_result = run_command([terraform_bin, "init", "-backend=false"], runtime_dir, command_env, log_callback=log_callback)
     if init_result.returncode != 0:
         raise RuntimeError(f"terraform init failed:\n{init_result.stderr.strip() or init_result.stdout.strip()}")
-    logs.append("terraform init completed.")
+    emit("terraform init completed.")
 
-    validate_result = run_command([terraform_bin, "validate"], runtime_dir, command_env)
+    emit("Running terraform validate.")
+    validate_result = run_command([terraform_bin, "validate"], runtime_dir, command_env, log_callback=log_callback)
     if validate_result.returncode != 0:
         raise RuntimeError(f"terraform validate failed:\n{validate_result.stderr.strip() or validate_result.stdout.strip()}")
-    logs.append("terraform validate completed.")
+    emit("terraform validate completed.")
 
     if not apply:
         return state, {
@@ -1002,12 +1042,14 @@ def provision_ncloud_target(project_state: dict[str, Any], selected_env: str, ou
             "tfvars": tfvars,
         }
 
-    apply_result = run_command([terraform_bin, "apply", "-auto-approve"], runtime_dir, command_env)
+    emit("Running terraform apply.")
+    apply_result = run_command([terraform_bin, "apply", "-auto-approve"], runtime_dir, command_env, log_callback=log_callback)
     if apply_result.returncode != 0:
         raise RuntimeError(f"terraform apply failed:\n{apply_result.stderr.strip() or apply_result.stdout.strip()}")
-    logs.append("terraform apply completed.")
+    emit("terraform apply completed.")
 
-    output_result = run_command([terraform_bin, "output", "-json"], runtime_dir, command_env)
+    emit("Collecting terraform outputs.")
+    output_result = run_command([terraform_bin, "output", "-json"], runtime_dir, command_env, log_callback=log_callback)
     if output_result.returncode != 0:
         raise RuntimeError(f"terraform output failed:\n{output_result.stderr.strip() or output_result.stdout.strip()}")
 
@@ -1071,10 +1113,12 @@ def provision_ncloud_target(project_state: dict[str, Any], selected_env: str, ou
         "integration_warnings": integration_warnings,
     }
 
-    logs.append(f"Wrote kubeconfig to {kubeconfig_path}.")
-    logs.append(f"Wrote Argo CD cluster secret manifest to {argocd_cluster_secret_path}.")
-    logs.extend(integration_logs)
-    logs.extend(f"WARNING: {warning}" for warning in integration_warnings)
+    emit(f"Wrote kubeconfig to {kubeconfig_path}.")
+    emit(f"Wrote Argo CD cluster secret manifest to {argocd_cluster_secret_path}.")
+    for message in integration_logs:
+        emit(message)
+    for warning in integration_warnings:
+        emit(f"WARNING: {warning}")
 
     return state, {
         "applied": True,
