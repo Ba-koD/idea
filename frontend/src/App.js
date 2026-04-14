@@ -133,9 +133,9 @@ function defaultProjectState() {
       tunnel_name: 'repo-example-platform',
       route_mode: 'platform_caddy',
       environments: {
-        dev: { subdomain: 'repo-example-dev', base_domain: 'rnen.kr' },
-        stage: { subdomain: 'repo-example-stage', base_domain: 'rnen.kr' },
-        prod: { subdomain: 'repo-example', base_domain: 'rnen.kr' }
+        dev: { subdomain: 'dev', base_domain: 'rnen.kr' },
+        stage: { subdomain: 'stage', base_domain: 'rnen.kr' },
+        prod: { subdomain: 'prod', base_domain: 'rnen.kr' }
       }
     },
     targets: {
@@ -249,9 +249,9 @@ function defaultProjectState() {
       entry_service_name: 'frontend',
       backend_service_name: 'backend',
       backend_base_path: '/api',
-      dev_hostname: 'repo-example-dev.rnen.kr',
-      stage_hostname: 'repo-example-stage.rnen.kr',
-      prod_hostname: 'repo-example.rnen.kr'
+      dev_hostname: 'dev.rnen.kr',
+      stage_hostname: 'stage.rnen.kr',
+      prod_hostname: 'prod.rnen.kr'
     },
     provisioning: {
       terraform_executable: 'terraform',
@@ -322,7 +322,11 @@ function normalizeProjectState(rawState) {
 
     merged.cloudflare.environments[envName] = envCloudflare;
     merged.routing[`${envName}_hostname`] = buildHostname(envCloudflare.subdomain, envCloudflare.base_domain);
-    merged.env[envName] = deepMerge(defaultProjectState().env[envName], merged.env[envName] || {});
+    if (incoming.env && Object.prototype.hasOwnProperty.call(incoming.env, envName)) {
+      merged.env[envName] = { ...(incoming.env[envName] || {}) };
+    } else {
+      merged.env[envName] = deepMerge(defaultProjectState().env[envName], merged.env[envName] || {});
+    }
     if (incoming.secrets && Object.prototype.hasOwnProperty.call(incoming.secrets, envName)) {
       merged.secrets[envName] = pruneLegacyExampleSecrets({ ...(incoming.secrets[envName] || {}) }, envName);
     } else {
@@ -789,6 +793,7 @@ function App() {
       <div className="content-layout">
         <aside className="sidebar">
           <h3 className="sidebar-title">환경 및 GitOps 설정</h3>
+          <div className="sidebar-scroll">
 
           <div className="config-card global-config-card">
             <div className="form-section-title">App Repository</div>
@@ -983,7 +988,7 @@ function App() {
                       next.cloudflare.environments[activeEnv].subdomain = event.target.value;
                     })
                   }
-                  placeholder="@, *, repo-example-dev"
+                  placeholder="@, *, dev"
                 />
               </div>
               <div className="form-group">
@@ -1145,6 +1150,7 @@ function App() {
             )}
 
             <div className="form-section-title">{activeEnv.toUpperCase()} Runtime</div>
+            <div className="form-section-title import-section-title">Import / Export (.env)</div>
             <div className="env-import-row">
               <div className="env-import-actions">
                 <button
@@ -1203,7 +1209,7 @@ function App() {
                     [activeEnv]: event.target.value
                   }))
                 }
-                placeholder={`IDEA_SELECTED_ENV=${activeEnv}\nIDEA_IMPORT_MODE=replace\nIDEA_PROJECT_NAME=repo-example\nAPP_ENV=${activeEnv}`}
+                placeholder={`IDEA_SELECTED_ENV=${activeEnv}\nIDEA_IMPORT_MODE=replace\nIDEA_PROJECT_NAME=repo-example\nIDEA_CLOUDFLARE_SUBDOMAIN=${activeEnv}\nAPP_ENV=${activeEnv}`}
               />
             </div>
 
@@ -1303,6 +1309,7 @@ function App() {
               DOWNLOAD GITOPS BUNDLE
             </a>
           )}
+          </div>
         </aside>
 
         <main className="main-view">

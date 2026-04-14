@@ -126,7 +126,8 @@ textarea {
   border: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
+  overflow: hidden;
+  min-height: 0;
   min-width: 0;
 }
 
@@ -135,6 +136,16 @@ textarea {
   margin-bottom: 14px;
   font-size: 1.1rem;
   color: #e2e8f0;
+  flex-shrink: 0;
+}
+
+.sidebar-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 6px;
 }
 
 .form-section-title {
@@ -145,6 +156,10 @@ textarea {
   letter-spacing: 0.04em;
   border-bottom: 1px solid #334155;
   padding-bottom: 5px;
+}
+
+.import-section-title {
+  margin-top: 10px;
 }
 
 .scope-note {
@@ -412,6 +427,7 @@ textarea {
   gap: 16px;
   overflow-y: auto;
   padding-right: 10px;
+  min-height: 0;
   min-width: 0;
 }
 

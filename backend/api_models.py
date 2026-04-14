@@ -213,15 +213,15 @@ DEFAULT_PROJECT_STATE: Dict[str, Any] = {
         "route_mode": "platform_caddy",
         "environments": {
             "dev": {
-                "subdomain": "repo-example-dev",
+                "subdomain": "dev",
                 "base_domain": "rnen.kr",
             },
             "stage": {
-                "subdomain": "repo-example-stage",
+                "subdomain": "stage",
                 "base_domain": "rnen.kr",
             },
             "prod": {
-                "subdomain": "repo-example",
+                "subdomain": "prod",
                 "base_domain": "rnen.kr",
             },
         },
@@ -231,9 +231,9 @@ DEFAULT_PROJECT_STATE: Dict[str, Any] = {
         "entry_service_name": "frontend",
         "backend_service_name": "backend",
         "backend_base_path": "/api",
-        "dev_hostname": "repo-example-dev.rnen.kr",
-        "stage_hostname": "repo-example-stage.rnen.kr",
-        "prod_hostname": "repo-example.rnen.kr",
+        "dev_hostname": "dev.rnen.kr",
+        "stage_hostname": "stage.rnen.kr",
+        "prod_hostname": "prod.rnen.kr",
     },
     "provisioning": default_provisioning(),
     "env": default_env_map(),
@@ -295,10 +295,14 @@ def normalize_project_state(raw_state: Any) -> Dict[str, Any]:
             env_cloudflare.get("base_domain", ""),
         )
 
-        env_values = state.setdefault("env", {}).setdefault(env_name, {})
-        env_values.setdefault("APP_ENV", env_name)
-        env_values.setdefault("APP_DISPLAY_NAME", f"Repo Example {env_name.title()}")
-        env_values.setdefault("PUBLIC_API_BASE_URL", routing.get("backend_base_path", "/api"))
+        incoming_env_map = incoming.get("env", {}).get(env_name)
+        if incoming_env_map is not None:
+            state.setdefault("env", {})[env_name] = deepcopy(incoming_env_map)
+        else:
+            env_values = state.setdefault("env", {}).setdefault(env_name, {})
+            env_values.setdefault("APP_ENV", env_name)
+            env_values.setdefault("APP_DISPLAY_NAME", f"Repo Example {env_name.title()}")
+            env_values.setdefault("PUBLIC_API_BASE_URL", routing.get("backend_base_path", "/api"))
 
         incoming_secret_map = incoming.get("secrets", {}).get(env_name)
         if incoming_secret_map is not None:
