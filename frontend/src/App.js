@@ -1352,43 +1352,43 @@ function App() {
               <div ref={logEndRef} />
             </div>
           </div>
-
-          <div className="status-bar">
-            <p>
-              ● Environment:{' '}
-              <span style={{ color: currentMeta.color, fontWeight: 'bold' }}>{activeEnv.toUpperCase()}</span>
-            </p>
-            <p>
-              ● Service URL:{' '}
-              {currentHostname ? (
-                <a
-                  href={`https://${currentHostname}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{ color: currentMeta.color, fontWeight: 'bold', marginLeft: '5px' }}
-                >
-                  {currentHostname} ↗
-                </a>
-              ) : (
-                <span style={{ color: '#666', marginLeft: '5px' }}>도메인을 입력해 주세요</span>
-              )}
-            </p>
-            <p>
-              ● Source: <strong>{stateSource}</strong>
-            </p>
-            <p>
-              ● Cluster: <strong>{currentTarget.ncloud.cluster_name}</strong>
-            </p>
-            {activeEnv === 'prod' && (
-              <p>
-                ● Active Slot:{' '}
-                <strong style={{ color: prodActiveColor === 'blue' ? '#3b82f6' : '#10b981' }}>
-                  {prodActiveColor.toUpperCase()}
-                </strong>
-              </p>
-            )}
-          </div>
         </main>
+
+        <div className="status-bar">
+          <p>
+            ● Environment:{' '}
+            <span style={{ color: currentMeta.color, fontWeight: 'bold' }}>{activeEnv.toUpperCase()}</span>
+          </p>
+          <p>
+            ● Service URL:{' '}
+            {currentHostname ? (
+              <a
+                href={`https://${currentHostname}`}
+                target="_blank"
+                rel="noreferrer"
+                style={{ color: currentMeta.color, fontWeight: 'bold', marginLeft: '5px' }}
+              >
+                {currentHostname} ↗
+              </a>
+            ) : (
+              <span style={{ color: '#666', marginLeft: '5px' }}>도메인을 입력해 주세요</span>
+            )}
+          </p>
+          <p>
+            ● Source: <strong>{stateSource}</strong>
+          </p>
+          <p>
+            ● Cluster: <strong>{currentTarget.ncloud.cluster_name}</strong>
+          </p>
+          {activeEnv === 'prod' && (
+            <p>
+              ● Active Slot:{' '}
+              <strong style={{ color: prodActiveColor === 'blue' ? '#3b82f6' : '#10b981' }}>
+                {prodActiveColor.toUpperCase()}
+              </strong>
+            </p>
+          )}
+        </div>
       </div>
     </div>
   );
