@@ -16,8 +16,8 @@
 1. 운영자가 `idea` 웹에서 `.env` 파일 업로드 또는 텍스트 붙여넣기를 한다.
 2. `tmp` backend가 `IDEA_*` 키를 `Project State`로 저장한다.
 3. prefix 없는 일반 키는 runtime env 또는 runtime secret으로 저장한다.
-4. `tmp`가 GitOps bundle을 생성한다.
-5. 필요하면 `tmp`가 Ncloud NKS target provisioning을 수행한다.
+4. `tmp`가 `Project State`를 platform backend의 암호화된 state DB에 저장한다.
+5. 필요하면 `tmp`가 Ncloud NKS target provisioning을 수행하고, 성공 시 GitOps 산출물을 내부적으로 갱신한다.
 6. Argo CD가 Kubernetes에 sync한다.
 
 중요한 점:
@@ -27,6 +27,8 @@
 - `dev / stage / prod` hostname은 Cloudflare `subdomain + base_domain`에서 계산된다.
 - `prod_blue_green_enabled`는 state와 UI에는 반영돼 있지만, 현재 GitOps manifest는 아직 실제 blue/green workload 2벌을 생성하지 않는다.
 - Ncloud provisioning은 `POST /api/provision-target` 경로로 실행된다.
+- backend는 기존 `outputs/project-state.json`이 있으면 첫 기동 시 암호화된 SQLite state DB로 마이그레이션한다.
+- provisioning은 이전 `terraform.tfstate`나 저장된 resource id가 있으면 기존 target을 우선 재사용한다.
 
 ## 2. IDEA Platform GitHub Actions Inputs
 

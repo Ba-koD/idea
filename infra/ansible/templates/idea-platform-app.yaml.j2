@@ -88,6 +88,21 @@ spec:
       targetPort: http
   type: ClusterIP
 ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ idea_backend_name }}-state
+  namespace: {{ idea_namespace }}
+  labels:
+    app.kubernetes.io/instance: idea-platform
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ idea_backend_state_storage_size }}
+  storageClassName: {{ idea_backend_state_storage_class }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -116,9 +131,16 @@ spec:
               value: "{{ idea_backend_container_port }}"
             - name: APP_ENV
               value: "platform"
+            - name: IDEA_STATE_DB_PATH
+              value: "{{ idea_backend_state_db_path }}"
+            - name: IDEA_STATE_ENCRYPTION_KEY_PATH
+              value: "{{ idea_backend_state_key_path }}"
           ports:
             - containerPort: {{ idea_backend_container_port }}
               name: http
+          volumeMounts:
+            - name: backend-state
+              mountPath: {{ idea_backend_state_mount_path }}
           readinessProbe:
             httpGet:
               path: {{ platform_caddy_backend_base_path }}/readyz
@@ -131,6 +153,10 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
+      volumes:
+        - name: backend-state
+          persistentVolumeClaim:
+            claimName: {{ idea_backend_name }}-state
 ---
 apiVersion: v1
 kind: Service

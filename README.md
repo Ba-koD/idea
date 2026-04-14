@@ -130,11 +130,12 @@ Cloudflare API 호출은 `idea`의 reconciler가 담당합니다.
 1. `repo B`에 코드 변경이 push되거나, 운영자가 웹 UI에서 배포를 요청합니다.
 2. 운영자가 웹 UI에서 저장한 `Project State`에는 repo URL, build 경로, Argo CD 대상, 배포 환경별 값, routing 규칙이 포함됩니다.
 3. `tmp 배포 계층`이 `Project State + repo B 구조`를 읽고, 필요한 경우 이미지를 build/push한 뒤 GitOps manifest를 생성하거나 갱신합니다.
-4. 필요하면 `tmp` backend가 `POST /api/provision-target`으로 Ncloud NKS target을 Terraform으로 생성하거나 기존 target 정보를 fetch합니다.
-5. 이 변경이 Argo CD가 감시하는 GitOps repo/path에 기록됩니다.
-6. Argo CD가 diff를 감지하고 Kubernetes에 sync합니다.
-7. 필요한 경우 migration이나 smoke test는 `Job` 또는 hook manifest로 실행됩니다.
-8. Cloudflare 관련 변경은 별도 reconciler가 API로 반영합니다.
+4. `Project State`는 platform backend의 암호화된 state DB에 저장되며, 기존 state가 있으면 우선 재사용합니다.
+5. 필요하면 `tmp` backend가 `POST /api/provision-target`으로 Ncloud NKS target을 Terraform으로 생성하거나 기존 target/runtime tfstate를 재사용합니다.
+6. 이 변경이 Argo CD가 감시하는 GitOps repo/path에 기록됩니다.
+7. Argo CD가 diff를 감지하고 Kubernetes에 sync합니다.
+8. 필요한 경우 migration이나 smoke test는 `Job` 또는 hook manifest로 실행됩니다.
+9. Cloudflare 관련 변경은 별도 reconciler가 API로 반영합니다.
 
 중요한 점:
 

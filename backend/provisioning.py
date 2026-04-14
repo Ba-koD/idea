@@ -98,7 +98,7 @@ TERRAFORM_MAIN_TF = dedent(
       use_existing_node_subnet       = !local.use_existing_cluster && trimspace(var.existing_node_subnet_no) != "" && can(regex("^[0-9]+$", var.existing_node_subnet_no))
       use_existing_lb_private_subnet = !local.use_existing_cluster && trimspace(var.existing_lb_private_subnet_no) != "" && can(regex("^[0-9]+$", var.existing_lb_private_subnet_no))
       use_existing_lb_public_subnet  = !local.use_existing_cluster && trimspace(var.existing_lb_public_subnet_no) != "" && can(regex("^[0-9]+$", var.existing_lb_public_subnet_no))
-      use_existing_node_pool         = trimspace(var.existing_node_pool_id) != "" && can(regex("^[0-9]+$", var.existing_node_pool_id))
+      use_existing_node_pool         = trimspace(var.existing_node_pool_id) != ""
       has_existing_login_key         = try(length(data.ncloud_login_key.existing.login_key_list), 0) > 0
       create_login_key               = !local.use_existing_cluster && !local.has_existing_login_key
     }
@@ -929,6 +929,13 @@ def extract_terraform_output(raw_output: str) -> dict[str, Any]:
     return {key: value.get("value") for key, value in payload.items()}
 
 
+def state_output_value(state_payload: dict[str, Any], output_name: str) -> Any:
+    output = state_payload.get("outputs", {}).get(output_name)
+    if isinstance(output, dict):
+        return output.get("value")
+    return None
+
+
 def read_terraform_state(runtime_dir: Path) -> dict[str, Any]:
     state_path = runtime_dir / "terraform.tfstate"
     if not state_path.exists():
@@ -957,28 +964,56 @@ def extract_partial_runtime_outputs(runtime_dir: Path) -> dict[str, Any]:
     node_attrs = first_resource_attributes(state_payload, "ncloud_subnet", "node")
     lb_private_attrs = first_resource_attributes(state_payload, "ncloud_subnet", "lb_private")
     lb_public_attrs = first_resource_attributes(state_payload, "ncloud_subnet", "lb_public")
+    node_pool_attrs = first_resource_attributes(state_payload, "ncloud_nks_node_pool", "node_pool")
     login_key_attrs = first_resource_attributes(state_payload, "ncloud_login_key", "managed")
     kubeconfig_attrs = first_resource_attributes(state_payload, "ncloud_nks_kube_config", "cluster")
 
     partial_outputs: dict[str, Any] = {}
-    if cluster_attrs.get("uuid"):
-        partial_outputs["cluster_uuid"] = cluster_attrs.get("uuid")
-        partial_outputs["cluster_endpoint"] = cluster_attrs.get("endpoint", "")
-        partial_outputs["vpc_no"] = cluster_attrs.get("vpc_no") or vpc_attrs.get("id") or vpc_attrs.get("vpc_no") or ""
-        partial_outputs["node_subnet_no"] = (
-            (cluster_attrs.get("subnet_no_list") or [""])[0]
-            or node_attrs.get("id")
-            or node_attrs.get("subnet_no")
-            or ""
-        )
-        partial_outputs["lb_private_subnet_no"] = (
-            cluster_attrs.get("lb_private_subnet_no") or lb_private_attrs.get("id") or lb_private_attrs.get("subnet_no") or ""
-        )
-        partial_outputs["lb_public_subnet_no"] = (
-            cluster_attrs.get("lb_public_subnet_no") or lb_public_attrs.get("id") or lb_public_attrs.get("subnet_no") or ""
-        )
+    cluster_uuid = state_output_value(state_payload, "cluster_uuid") or cluster_attrs.get("uuid")
+    cluster_endpoint = state_output_value(state_payload, "cluster_endpoint") or cluster_attrs.get("endpoint", "")
+    vpc_no = state_output_value(state_payload, "vpc_no") or cluster_attrs.get("vpc_no") or vpc_attrs.get("id") or vpc_attrs.get("vpc_no") or ""
+    node_subnet_no = (
+        state_output_value(state_payload, "node_subnet_no")
+        or (cluster_attrs.get("subnet_no_list") or [""])[0]
+        or node_attrs.get("id")
+        or node_attrs.get("subnet_no")
+        or ""
+    )
+    lb_private_subnet_no = (
+        state_output_value(state_payload, "lb_private_subnet_no")
+        or cluster_attrs.get("lb_private_subnet_no")
+        or lb_private_attrs.get("id")
+        or lb_private_attrs.get("subnet_no")
+        or ""
+    )
+    lb_public_subnet_no = (
+        state_output_value(state_payload, "lb_public_subnet_no")
+        or cluster_attrs.get("lb_public_subnet_no")
+        or lb_public_attrs.get("id")
+        or lb_public_attrs.get("subnet_no")
+        or ""
+    )
+    node_pool_id = state_output_value(state_payload, "node_pool_id") or node_pool_attrs.get("id") or ""
 
-    if kubeconfig_attrs.get("host"):
+    if cluster_uuid:
+        partial_outputs["cluster_uuid"] = cluster_uuid
+    if cluster_endpoint:
+        partial_outputs["cluster_endpoint"] = cluster_endpoint
+    if vpc_no:
+        partial_outputs["vpc_no"] = vpc_no
+    if node_subnet_no:
+        partial_outputs["node_subnet_no"] = node_subnet_no
+    if lb_private_subnet_no:
+        partial_outputs["lb_private_subnet_no"] = lb_private_subnet_no
+    if lb_public_subnet_no:
+        partial_outputs["lb_public_subnet_no"] = lb_public_subnet_no
+    if node_pool_id:
+        partial_outputs["node_pool_id"] = node_pool_id
+
+    kubeconfig_output = state_output_value(state_payload, "kubeconfig")
+    if isinstance(kubeconfig_output, dict) and kubeconfig_output.get("host"):
+        partial_outputs["kubeconfig"] = kubeconfig_output
+    elif kubeconfig_attrs.get("host"):
         partial_outputs["kubeconfig"] = {
             "host": kubeconfig_attrs.get("host", ""),
             "client_certificate": kubeconfig_attrs.get("client_certificate", ""),
@@ -1023,6 +1058,8 @@ def apply_partial_outputs_to_state(state: dict[str, Any], selected_env: str, par
     ncloud = state["targets"][selected_env]["ncloud"]
     if partial_outputs.get("cluster_uuid"):
         ncloud["cluster_uuid"] = partial_outputs.get("cluster_uuid", "")
+    if partial_outputs.get("cluster_endpoint"):
+        ncloud["cluster_endpoint"] = partial_outputs.get("cluster_endpoint", "")
     if partial_outputs.get("vpc_no"):
         ncloud["vpc_no"] = partial_outputs.get("vpc_no", "")
     if partial_outputs.get("node_subnet_no"):
@@ -1031,6 +1068,67 @@ def apply_partial_outputs_to_state(state: dict[str, Any], selected_env: str, par
         ncloud["lb_subnet_no"] = partial_outputs.get("lb_private_subnet_no", "")
     if partial_outputs.get("lb_public_subnet_no"):
         ncloud["lb_public_subnet_no"] = partial_outputs.get("lb_public_subnet_no", "")
+    if partial_outputs.get("node_pool_id"):
+        ncloud["node_pool_id"] = partial_outputs.get("node_pool_id", "")
+
+
+def read_runtime_tfvars(runtime_dir: Path) -> dict[str, Any]:
+    tfvars_path = runtime_dir / "terraform.tfvars.json"
+    if not tfvars_path.exists():
+        return {}
+    try:
+        return json.loads(tfvars_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def recover_state_from_runtime_artifacts(
+    state: dict[str, Any],
+    selected_env: str,
+    output_root: Path,
+    log_callback: Callable[[str], None] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    runtime_dir = ensure_runtime_dir(output_root, state["project"]["name"], selected_env)
+    saved_tfvars = read_runtime_tfvars(runtime_dir)
+    desired_cluster_name = str(state["targets"][selected_env]["ncloud"].get("cluster_name") or "").strip()
+
+    if saved_tfvars and desired_cluster_name and saved_tfvars.get("cluster_name") != desired_cluster_name:
+        return state, {}
+
+    recovered = extract_partial_runtime_outputs(runtime_dir)
+    if not recovered:
+        return state, {}
+
+    ncloud = state["targets"][selected_env]["ncloud"]
+    changed = False
+
+    if recovered.get("cluster_uuid") and not looks_like_uuid(ncloud.get("cluster_uuid")):
+        changed = True
+    if recovered.get("vpc_no") and not looks_like_resource_id(ncloud.get("vpc_no")):
+        changed = True
+    if recovered.get("node_subnet_no") and not looks_like_resource_id(ncloud.get("subnet_no")):
+        changed = True
+    if recovered.get("lb_private_subnet_no") and not looks_like_resource_id(ncloud.get("lb_subnet_no")):
+        changed = True
+    if recovered.get("lb_public_subnet_no") and not looks_like_resource_id(ncloud.get("lb_public_subnet_no")):
+        changed = True
+    if recovered.get("node_pool_id") and looks_like_placeholder(ncloud.get("node_pool_id")):
+        changed = True
+    if recovered.get("cluster_endpoint") and looks_like_placeholder(ncloud.get("cluster_endpoint")):
+        changed = True
+
+    if not changed:
+        return state, recovered
+
+    apply_partial_outputs_to_state(state, selected_env, recovered)
+    if recovered.get("cluster_endpoint"):
+        state["argo"]["destination_server"] = recovered.get("cluster_endpoint", "")
+    if log_callback is not None:
+        log_callback(
+            "Recovered existing Ncloud runtime ids from the saved terraform state before apply. "
+            f"cluster_uuid={recovered.get('cluster_uuid', '') or '(unknown)'}"
+        )
+    return state, recovered
 
 
 def build_runtime_tfvars(project_state: dict[str, Any], selected_env: str) -> dict[str, Any]:
@@ -1059,7 +1157,7 @@ def build_runtime_tfvars(project_state: dict[str, Any], selected_env: str) -> di
         "existing_node_subnet_no": ncloud.get("subnet_no") if looks_like_resource_id(ncloud.get("subnet_no")) else "",
         "existing_lb_private_subnet_no": ncloud.get("lb_subnet_no") if looks_like_resource_id(ncloud.get("lb_subnet_no")) else "",
         "existing_lb_public_subnet_no": ncloud.get("lb_public_subnet_no") if looks_like_resource_id(ncloud.get("lb_public_subnet_no")) else "",
-        "existing_node_pool_id": ncloud.get("node_pool_id") if looks_like_resource_id(ncloud.get("node_pool_id")) else "",
+        "existing_node_pool_id": ncloud.get("node_pool_id") if not looks_like_placeholder(ncloud.get("node_pool_id")) else "",
         "vpc_name": normalize_resource_name(ncloud.get("vpc_name"), f"{cluster_name}-vpc", 30),
         "vpc_cidr": ncloud.get("vpc_cidr", "10.10.0.0/16"),
         "node_subnet_name": normalize_resource_name(ncloud.get("node_subnet_name"), f"{cluster_name}-node", 30),
@@ -1166,6 +1264,14 @@ def provision_ncloud_target(
             + ", ".join(f"{item['ref']} (env {item['env']})" for item in missing_refs)
         )
 
+    logs: list[str] = []
+
+    def emit(message: str) -> None:
+        logs.append(message)
+        if log_callback is not None:
+            log_callback(message)
+
+    state, recovered_runtime_outputs = recover_state_from_runtime_artifacts(state, selected_env, output_root, log_callback=emit)
     tfvars = build_runtime_tfvars(state, selected_env)
     validate_ncloud_preflight(tfvars, access_key_ref, access_key, secret_key_ref, secret_key)
     runtime_dir = ensure_runtime_dir(output_root, project["name"], selected_env)
@@ -1181,14 +1287,12 @@ def provision_ncloud_target(
         "TF_IN_AUTOMATION": "1",
     }
 
-    logs: list[str] = []
-
-    def emit(message: str) -> None:
-        logs.append(message)
-        if log_callback is not None:
-            log_callback(message)
-
     emit(f"Prepared Terraform runtime in {runtime_dir}.")
+    if recovered_runtime_outputs:
+        emit(
+            "Provisioning reused runtime artifacts from the previous successful state. "
+            f"node_pool_id={recovered_runtime_outputs.get('node_pool_id', '') or '(create new)'}."
+        )
     emit(f"Ncloud target cluster_name={tfvars['cluster_name']} zone={tfvars['zone']} region={tfvars['region']}.")
     emit(f"Existing cluster_uuid={tfvars['existing_cluster_uuid'] or '(create new)'} vpc_no={tfvars['existing_vpc_no'] or '(create new)'}.")
     emit(f"Ncloud node server spec={tfvars['node_server_spec_code']} node_count={tfvars['node_count']}.")

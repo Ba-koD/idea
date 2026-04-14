@@ -11,7 +11,7 @@ RUN apt-get update \
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY api_models.py env_import.py generator.py main.py provisioning.py ./
+COPY api_models.py env_import.py generator.py main.py provisioning.py state_store.py ./
 COPY templates ./templates
 
 EXPOSE 8080

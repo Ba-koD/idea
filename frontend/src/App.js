@@ -133,6 +133,16 @@ function formatLines(values) {
   return (values || []).join('\n');
 }
 
+function appendLogMessage(currentLogs, message) {
+  if (!message) {
+    return currentLogs;
+  }
+  if (currentLogs[currentLogs.length - 1] === message) {
+    return currentLogs;
+  }
+  return [...currentLogs, message];
+}
+
 function pruneLegacyExampleSecrets(secretMap, envName) {
   const legacyExampleValue = `secret://repo-example/${envName}/example-api-token`;
   return Object.fromEntries(
@@ -422,15 +432,9 @@ function App() {
   const [prodActiveColor, setProdActiveColor] = useState('blue');
   const [projectState, setProjectState] = useState(defaultProjectState);
   const [logs, setLogs] = useState([]);
-  const [bundleDownloadUrls, setBundleDownloadUrls] = useState({
-    dev: '',
-    stage: '',
-    prod: ''
-  });
   const [stateSource, setStateSource] = useState('loading');
   const [isReady, setIsReady] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [isDeploying, setIsDeploying] = useState(false);
   const [isProvisioningTarget, setIsProvisioningTarget] = useState(false);
   const [isImportingEnv, setIsImportingEnv] = useState(false);
   const [isExportingEnv, setIsExportingEnv] = useState(false);
@@ -469,6 +473,22 @@ function App() {
       setIsToastDismissed(false);
       setIsToastExpanded(false);
     }
+  }, [statusMessage]);
+
+  useEffect(() => {
+    if (!statusMessage) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setStatusMessage('');
+      setIsToastExpanded(false);
+      setIsToastDismissed(false);
+    }, 5000);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
   }, [statusMessage]);
 
   useEffect(() => {
@@ -561,53 +581,14 @@ function App() {
 
     try {
       await persistProjectState();
-      setLogs((currentLogs) => [...currentLogs, 'Saved project state to backend.']);
+      setLogs((currentLogs) => appendLogMessage(currentLogs, 'Saved project state to backend.'));
       setStatusMessage('Project State saved.');
     } catch (error) {
-      setLogs((currentLogs) => [...currentLogs, `Save failed: ${error.message}`]);
+      setLogs((currentLogs) => appendLogMessage(currentLogs, `Save failed: ${error.message}`));
       setStatusMessage(`Save failed: ${error.message}`);
     } finally {
       setIsSaving(false);
     }
-  }
-
-  async function handleDeploy() {
-    setIsDeploying(true);
-    setStatusMessage('');
-
-    try {
-      const saved = await persistProjectState();
-      const payload = await deployEnvironment(saved, activeEnv);
-      setLogs(payload.logs || ['Bundle generated.']);
-      setBundleDownloadUrls((current) => ({
-        ...current,
-        [activeEnv]: payload.download_url || ''
-      }));
-      setStatusMessage(payload.message || 'Bundle generated.');
-    } catch (error) {
-      setLogs([`Deploy failed: ${error.message}`]);
-      setStatusMessage(`Deploy failed: ${error.message}`);
-    } finally {
-      setIsDeploying(false);
-    }
-  }
-
-  async function deployEnvironment(savedState, envName) {
-    const response = await fetch(buildApiUrl('/deploy'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        selected_env: envName,
-        project_state: savedState
-      })
-    });
-
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.detail || `deploy failed with ${response.status}`);
-    }
-
-    return payload;
   }
 
   async function handleProvisionTarget() {
@@ -652,10 +633,6 @@ function App() {
           setProjectState(nextState);
           setStateSource('backend');
           window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
-          setBundleDownloadUrls((current) => ({
-            ...current,
-            [activeEnv]: result.gitops_bundle_download_url || current[activeEnv] || ''
-          }));
           setProvisionArtifactUrls((current) => ({
             ...current,
             [activeEnv]: {
@@ -679,7 +656,7 @@ function App() {
         }
       }
     } catch (error) {
-      setLogs([`Provisioning failed: ${error.message}`]);
+      setLogs((currentLogs) => appendLogMessage(currentLogs, `Provisioning failed: ${error.message}`));
       setStatusMessage(`Provisioning failed: ${error.message}`);
     } finally {
       setIsProvisioningTarget(false);
@@ -695,7 +672,7 @@ function App() {
         body: JSON.stringify({ target_color: color })
       });
     } catch (error) {
-      setLogs((currentLogs) => [...currentLogs, `Traffic switch failed: ${error.message}`]);
+      setLogs((currentLogs) => appendLogMessage(currentLogs, `Traffic switch failed: ${error.message}`));
     }
   }
 
@@ -750,7 +727,7 @@ function App() {
       ]);
       setStatusMessage(payload.message || `${importedEnv.toUpperCase()} .env imported.`);
     } catch (error) {
-      setLogs((currentLogs) => [...currentLogs, `Env import failed: ${error.message}`]);
+      setLogs((currentLogs) => appendLogMessage(currentLogs, `Env import failed: ${error.message}`));
       setStatusMessage(`Env import failed: ${error.message}`);
     } finally {
       setIsImportingEnv(false);
@@ -810,7 +787,7 @@ function App() {
       ]);
       setStatusMessage(payload.message || `${activeEnv.toUpperCase()} .env export generated.`);
     } catch (error) {
-      setLogs((currentLogs) => [...currentLogs, `Env export failed: ${error.message}`]);
+      setLogs((currentLogs) => appendLogMessage(currentLogs, `Env export failed: ${error.message}`));
       setStatusMessage(`Env export failed: ${error.message}`);
     } finally {
       setIsExportingEnv(false);
@@ -1278,7 +1255,7 @@ function App() {
                   type="button"
                   className="secondary-btn env-import-btn"
                   onClick={openEnvImportPicker}
-                  disabled={isSaving || isDeploying || isProvisioningTarget || isImportingEnv || isExportingEnv}
+                  disabled={isSaving || isProvisioningTarget || isImportingEnv || isExportingEnv}
                 >
                   {isImportingEnv ? `IMPORTING ${activeEnv.toUpperCase()}...` : `IMPORT FILE`}
                 </button>
@@ -1286,7 +1263,7 @@ function App() {
                   type="button"
                   className="secondary-btn env-import-btn"
                   onClick={handleEnvTextImport}
-                  disabled={isSaving || isDeploying || isProvisioningTarget || isImportingEnv || isExportingEnv}
+                  disabled={isSaving || isProvisioningTarget || isImportingEnv || isExportingEnv}
                 >
                   IMPORT TEXT
                 </button>
@@ -1294,7 +1271,7 @@ function App() {
                   type="button"
                   className="secondary-btn env-import-btn"
                   onClick={handleEnvExport}
-                  disabled={isSaving || isDeploying || isProvisioningTarget || isImportingEnv || isExportingEnv}
+                  disabled={isSaving || isProvisioningTarget || isImportingEnv || isExportingEnv}
                 >
                   {isExportingEnv ? `EXPORTING ${activeEnv.toUpperCase()}...` : `EXPORT .ENV`}
                 </button>
@@ -1388,25 +1365,16 @@ function App() {
           </div>
 
           <div className="action-row">
-            <button className="secondary-btn" onClick={handleSave} disabled={isSaving || isDeploying || isProvisioningTarget || isImportingEnv || isExportingEnv}>
+            <button className="secondary-btn" onClick={handleSave} disabled={isSaving || isProvisioningTarget || isImportingEnv || isExportingEnv}>
               {isSaving ? 'SAVING...' : 'SAVE STATE'}
             </button>
 
             <button
               className="secondary-btn"
               onClick={handleProvisionTarget}
-              disabled={isSaving || isDeploying || isProvisioningTarget || isImportingEnv || isExportingEnv}
+              disabled={isSaving || isProvisioningTarget || isImportingEnv || isExportingEnv}
             >
               {isProvisioningTarget ? `PROVISIONING ${activeEnv.toUpperCase()}...` : `PROVISION ${activeEnv.toUpperCase()} TARGET`}
-            </button>
-
-            <button
-              className="main-deploy-btn"
-              style={{ backgroundColor: currentMeta.color }}
-              onClick={handleDeploy}
-              disabled={isSaving || isDeploying || isProvisioningTarget || isImportingEnv || isExportingEnv}
-            >
-              {isDeploying ? 'GENERATING...' : `GENERATE ${activeEnv.toUpperCase()} BUNDLE`}
             </button>
           </div>
 
@@ -1425,11 +1393,6 @@ function App() {
             </div>
           )}
 
-          {bundleDownloadUrls[activeEnv] && (
-            <a href={bundleDownloadUrls[activeEnv]} download className="download-btn-link">
-              DOWNLOAD {activeEnv.toUpperCase()} GITOPS BUNDLE
-            </a>
-          )}
           </div>
         </aside>
 
@@ -1525,7 +1488,10 @@ function App() {
           <button
             type="button"
             className="toast-close"
-            onClick={() => setIsToastDismissed(true)}
+            onClick={() => {
+              setIsToastDismissed(true);
+              setStatusMessage('');
+            }}
             aria-label="Dismiss status message"
           >
             ×

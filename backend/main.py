@@ -16,10 +16,11 @@ import generator
 from api_models import DeployRequest, EnvExchangeRequest, ProjectState, ProvisionRequest, normalize_project_state
 from env_import import apply_env_import, export_env_text, write_export_env_file
 from provisioning import ProvisioningPartialFailure, provision_ncloud_target
+from state_store import load_or_initialize_state, save_state as save_encrypted_state
 
 app = FastAPI(title="idea Control Plane API")
 OUTPUT_ROOT = Path("outputs")
-PROJECT_STATE_PATH = OUTPUT_ROOT / "project-state.json"
+LEGACY_PROJECT_STATE_PATH = OUTPUT_ROOT / "project-state.json"
 PROVISION_TASKS: dict[str, dict] = {}
 PROVISION_TASKS_LOCK = threading.Lock()
 
@@ -43,21 +44,11 @@ def runtime_payload(status: str = "ok"):
 
 
 def ensure_project_state_file() -> dict:
-    if PROJECT_STATE_PATH.exists():
-        try:
-            payload = json.loads(PROJECT_STATE_PATH.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            payload = {}
-    else:
-        payload = {}
-
-    normalized = normalize_project_state(payload)
-    OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
-    PROJECT_STATE_PATH.write_text(
-        json.dumps(normalized, indent=2, ensure_ascii=True) + "\n",
-        encoding="utf-8",
+    return load_or_initialize_state(
+        OUTPUT_ROOT,
+        LEGACY_PROJECT_STATE_PATH,
+        normalize_project_state,
     )
-    return normalized
 
 
 def load_project_state() -> dict:
@@ -65,13 +56,7 @@ def load_project_state() -> dict:
 
 
 def save_project_state(payload: ProjectState | dict) -> dict:
-    normalized = normalize_project_state(payload)
-    OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
-    PROJECT_STATE_PATH.write_text(
-        json.dumps(normalized, indent=2, ensure_ascii=True) + "\n",
-        encoding="utf-8",
-    )
-    return normalized
+    return save_encrypted_state(OUTPUT_ROOT, payload, normalize_project_state)
 
 
 def create_provision_task(selected_env: str) -> dict:
@@ -298,9 +283,8 @@ async def provision_target(req: ProvisionRequest):
                     "argocd_cluster_secret_download_url": (
                         f"/api/download-provision/{saved_state['project']['name']}/{selected_env}/argocd-cluster-secret"
                     ),
-                    "gitops_bundle_download_url": bundle["download_url"],
                     "logs": result["logs"],
-                    "message": f"{selected_env.upper()} Ncloud target provisioned and GitOps bundle generated.",
+                    "message": f"{selected_env.upper()} Ncloud target provisioned and GitOps artifacts refreshed.",
                 }
             )
         if result.get("warnings"):
@@ -363,9 +347,8 @@ async def start_provision_target(req: ProvisionRequest):
                         "argocd_cluster_secret_download_url": (
                             f"/api/download-provision/{saved_state['project']['name']}/{payload['selected_env']}/argocd-cluster-secret"
                         ),
-                        "gitops_bundle_download_url": bundle["download_url"],
                         "logs": result["logs"],
-                        "message": f"{payload['selected_env'].upper()} Ncloud target provisioned and GitOps bundle generated.",
+                        "message": f"{payload['selected_env'].upper()} Ncloud target provisioned and GitOps artifacts refreshed.",
                     }
                 )
             if result.get("warnings"):
@@ -488,7 +471,7 @@ async def switch_traffic(data: dict):
 async def root():
     return {
         **runtime_payload(),
-        "message": "Use /api/project-state, /api/project-state/import-env, /api/project-state/export-env, /api/deploy, /api/download, or /api/healthz.",
+        "message": "Use /api/project-state, /api/project-state/import-env, /api/project-state/export-env, /api/provision-target/start, or /api/healthz.",
     }
 
 

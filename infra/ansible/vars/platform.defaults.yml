@@ -46,6 +46,11 @@ idea_frontend_container_port: 80
 idea_frontend_service_port: 80
 idea_backend_container_port: 8080
 idea_backend_service_port: 8080
+idea_backend_state_storage_class: standard
+idea_backend_state_storage_size: 2Gi
+idea_backend_state_mount_path: /app/outputs
+idea_backend_state_db_path: /app/outputs/project-state.db
+idea_backend_state_key_path: /app/outputs/project-state.key
 idea_backend_env:
   HTTP_PORT: "8080"
   HTTP_RESPONSE: '{"status":"ok","service":"idea-backend"}'
