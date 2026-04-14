@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -14,6 +15,8 @@ from typing import Any, Callable
 from urllib.error import HTTPError
 from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
+
+import bcrypt
 
 SUPPORTED_NCLOUD_CLUSTER_VERSIONS: tuple[str, ...] = ("1.33.4", "1.34.3", "1.32.8")
 DEFAULT_NCLOUD_CLUSTER_VERSION = "1.33.4"
@@ -659,6 +662,67 @@ def apply_argocd_cluster_secret_to_platform(
         "secret_name": secret_name,
         "action": action,
         "logs": [f"Argo CD cluster secret {secret_name} {action} in the platform cluster."],
+    }
+
+
+def apply_argocd_admin_password(project_state: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    state = deepcopy(project_state)
+    secret_ref = str(state.get("argo", {}).get("admin_password_secret_ref", "")).strip()
+    if not secret_ref:
+        raise ValueError("argo.admin_password_secret_ref must be configured before Argo admin password apply can run.")
+
+    password = resolve_secret_value(state, secret_ref)
+    if looks_like_placeholder(password):
+        raise ValueError(
+            f"Argo admin password value for {secret_ref!r} is missing or still a placeholder. "
+            "Fill IDEA_ARGO_ADMIN_PASSWORD_VALUE before applying the password."
+        )
+
+    applied_at = datetime.now(timezone.utc).isoformat()
+    password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=10)).decode("utf-8")
+    secret_path = "/api/v1/namespaces/argocd/secrets/argocd-secret"
+    deployment_path = "/apis/apps/v1/namespaces/argocd/deployments/argocd-server"
+
+    kube_api_request(
+        secret_path,
+        method="PATCH",
+        body={
+            "data": {
+                "admin.password": base64.b64encode(password_hash.encode("utf-8")).decode("utf-8"),
+                "admin.passwordMtime": base64.b64encode(applied_at.encode("utf-8")).decode("utf-8"),
+            }
+        },
+        expected_statuses=(200,),
+        headers={"Content-Type": "application/merge-patch+json"},
+    )
+
+    kube_api_request(
+        deployment_path,
+        method="PATCH",
+        body={
+            "spec": {
+                "template": {
+                    "metadata": {
+                        "annotations": {
+                            "idea-platform/restarted-at": applied_at,
+                        }
+                    }
+                }
+            }
+        },
+        expected_statuses=(200,),
+        headers={"Content-Type": "application/merge-patch+json"},
+    )
+
+    state["argo"]["admin_password_last_applied_at"] = applied_at
+    return state, {
+        "applied": True,
+        "applied_at": applied_at,
+        "secret_ref": secret_ref,
+        "logs": [
+            f"Updated argocd-secret admin password from secret ref {secret_ref}.",
+            "Restarted argocd-server deployment so the new admin password takes effect.",
+        ],
     }
 
 
@@ -1341,6 +1405,10 @@ def build_destroy_import_targets(project_state: dict[str, Any], selected_env: st
     node_pool_id = str(ncloud.get("node_pool_id", "")).strip()
     if node_pool_id and not looks_like_placeholder(node_pool_id):
         targets.append(("ncloud_nks_node_pool.node_pool[0]", node_pool_id))
+    else:
+        node_pool_name = str(ncloud.get("node_pool_name", "")).strip()
+        if looks_like_uuid(cluster_uuid) and node_pool_name:
+            targets.append(("ncloud_nks_node_pool.node_pool[0]", f"{cluster_uuid}:{node_pool_name}"))
 
     return targets
 
@@ -1352,7 +1420,6 @@ def validate_destroy_import_targets(project_state: dict[str, Any], selected_env:
         "vpc_no": looks_like_resource_id(ncloud.get("vpc_no")),
         "subnet_no": looks_like_resource_id(ncloud.get("subnet_no")),
         "lb_subnet_no": looks_like_resource_id(ncloud.get("lb_subnet_no")),
-        "node_pool_id": bool(str(ncloud.get("node_pool_id", "")).strip() and not looks_like_placeholder(ncloud.get("node_pool_id"))),
     }
     missing = [field_name for field_name, is_present in required_fields.items() if not is_present]
     if missing:
@@ -1370,7 +1437,8 @@ def import_existing_destroy_targets(
     command_env: dict[str, str],
     import_targets: list[tuple[str, str]],
     log_callback: Callable[[str], None] | None = None,
-) -> None:
+) -> list[tuple[str, str]]:
+    skipped_targets: list[tuple[str, str]] = []
     for resource_address, resource_id in import_targets:
         result = run_command(
             [terraform_bin, "import", resource_address, resource_id],
@@ -1379,10 +1447,37 @@ def import_existing_destroy_targets(
             log_callback=log_callback,
         )
         if result.returncode != 0:
+            error_text = result.stderr.strip() or result.stdout.strip()
+            if "Cannot import non-existent remote object" in error_text:
+                if log_callback is not None:
+                    log_callback(
+                        f"Skipping {resource_address} import because {resource_id} no longer exists remotely."
+                    )
+                skipped_targets.append((resource_address, resource_id))
+                continue
             raise RuntimeError(
                 f"terraform import failed for {resource_address} ({resource_id}):\n"
-                f"{result.stderr.strip() or result.stdout.strip()}"
+                f"{error_text}"
             )
+    return skipped_targets
+
+
+def clear_missing_import_targets(state: dict[str, Any], selected_env: str, import_targets: list[tuple[str, str]]) -> None:
+    ncloud = state["targets"][selected_env]["ncloud"]
+    for resource_address, _ in import_targets:
+        if resource_address == "ncloud_nks_node_pool.node_pool[0]":
+            ncloud["node_pool_id"] = ""
+        elif resource_address == "ncloud_nks_cluster.cluster[0]":
+            ncloud["cluster_uuid"] = ""
+            ncloud["cluster_endpoint"] = ""
+        elif resource_address == "ncloud_vpc.managed[0]":
+            ncloud["vpc_no"] = ""
+        elif resource_address == "ncloud_subnet.node[0]":
+            ncloud["subnet_no"] = ""
+        elif resource_address == "ncloud_subnet.lb_private[0]":
+            ncloud["lb_subnet_no"] = ""
+        elif resource_address == "ncloud_subnet.lb_public[0]":
+            ncloud["lb_public_subnet_no"] = ""
 
 
 def delete_argocd_cluster_secret_from_platform(cluster_name: str, selected_env: str) -> dict[str, Any]:
@@ -1696,13 +1791,20 @@ def destroy_ncloud_target(
 
     if using_import_destroy_state:
         emit("Importing the current Ncloud resources into a temporary Terraform state for safe destroy.")
-        import_existing_destroy_targets(
+        skipped_import_targets = import_existing_destroy_targets(
             destroy_runtime_dir,
             terraform_bin,
             command_env,
             import_targets,
             log_callback=log_callback,
         )
+        if skipped_import_targets:
+            clear_missing_import_targets(state, selected_env, skipped_import_targets)
+            emit(
+                "Some previously tracked Ncloud resources were already absent and were skipped during import: "
+                + ", ".join(resource_address for resource_address, _ in skipped_import_targets)
+                + "."
+            )
         emit("terraform import completed for the existing target resources.")
 
     if not apply:

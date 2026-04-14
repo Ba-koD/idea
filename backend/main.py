@@ -15,7 +15,12 @@ from fastapi.responses import FileResponse
 import generator
 from api_models import DeployRequest, EnvExchangeRequest, ProjectState, ProvisionRequest, normalize_project_state
 from env_import import apply_env_import, export_env_text, write_export_env_file
-from provisioning import ProvisioningPartialFailure, destroy_ncloud_target, provision_ncloud_target
+from provisioning import (
+    ProvisioningPartialFailure,
+    apply_argocd_admin_password,
+    destroy_ncloud_target,
+    provision_ncloud_target,
+)
 from state_store import (
     load_or_initialize_state,
     load_task as load_encrypted_task,
@@ -450,6 +455,28 @@ async def get_provision_target_status(task_id: str):
     return task
 
 
+@app.post("/api/argo-admin-password/apply")
+async def apply_argo_admin_password(project_state: ProjectState):
+    try:
+        state = save_project_state(project_state)
+        next_state, result = apply_argocd_admin_password(state)
+        saved_state = save_project_state(next_state)
+        return {
+            "status": "success",
+            "message": "Argo CD admin password updated from IDEA platform state.",
+            "project_state": saved_state,
+            "logs": result["logs"],
+            "applied_at": result["applied_at"],
+            "secret_ref": result["secret_ref"],
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @app.get("/api/healthz")
 async def healthz():
     return runtime_payload()
@@ -520,7 +547,7 @@ async def switch_traffic(data: dict):
 async def root():
     return {
         **runtime_payload(),
-        "message": "Use /api/project-state, /api/project-state/import-env, /api/project-state/export-env, /api/provision-target/start, or /api/healthz.",
+        "message": "Use /api/project-state, /api/project-state/import-env, /api/project-state/export-env, /api/provision-target/start, /api/argo-admin-password/apply, or /api/healthz.",
     }
 
 

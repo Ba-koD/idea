@@ -289,6 +289,8 @@ function defaultProjectState() {
       gitops_repo_branch: 'main',
       gitops_repo_path: 'gitops/apps',
       gitops_repo_access_secret_ref: 'gitops-repo-token',
+      admin_password_secret_ref: 'argocd-admin-password',
+      admin_password_last_applied_at: '',
       access_hint: 'https://argo.rnen.kr'
     },
     cloudflare: {
@@ -579,6 +581,7 @@ function App() {
   const [activeTargetOperation, setActiveTargetOperation] = useState('');
   const [isImportingEnv, setIsImportingEnv] = useState(false);
   const [isExportingEnv, setIsExportingEnv] = useState(false);
+  const [isApplyingArgoPassword, setIsApplyingArgoPassword] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [isToastExpanded, setIsToastExpanded] = useState(false);
   const [isToastDismissed, setIsToastDismissed] = useState(false);
@@ -738,6 +741,45 @@ function App() {
       setStatusMessage(`Save failed: ${error.message}`);
     } finally {
       setIsSaving(false);
+    }
+  }
+
+  async function handleApplyArgoAdminPassword() {
+    setIsApplyingArgoPassword(true);
+    setStatusMessage('');
+
+    try {
+      const saved = await persistProjectState();
+      const response = await fetch(buildApiUrl('/argo-admin-password/apply'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(saved)
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.detail || `argo-admin-password apply failed with ${response.status}`);
+      }
+
+      const nextState = normalizeProjectState(payload.project_state || saved);
+      setProjectState(nextState);
+      setStateSource('backend');
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
+      setEnvLogs((currentLogs) => ({
+        ...currentLogs,
+        [activeEnv]: [
+          ...(currentLogs[activeEnv] || []),
+          ...((payload.logs || []).map((entry) => String(entry)))
+        ]
+      }));
+      setStatusMessage(payload.message || 'Argo CD admin password updated.');
+    } catch (error) {
+      setEnvLogs((currentLogs) => ({
+        ...currentLogs,
+        [activeEnv]: appendLogMessage(currentLogs[activeEnv] || [], `Argo admin password apply failed: ${error.message}`)
+      }));
+      setStatusMessage(`Argo admin password apply failed: ${error.message}`);
+    } finally {
+      setIsApplyingArgoPassword(false);
     }
   }
 
@@ -1325,6 +1367,30 @@ function App() {
 
             <div className="double-input-row">
               <div className="form-group">
+                <label>Argo Admin Password Secret Ref</label>
+                <input
+                  type="text"
+                  value={projectState.argo.admin_password_secret_ref}
+                  onChange={(event) =>
+                    updateProjectState((next) => {
+                      next.argo.admin_password_secret_ref = event.target.value;
+                    })
+                  }
+                  placeholder="argocd-admin-password"
+                />
+              </div>
+              <div className="form-group">
+                <label>Argo Password Applied At</label>
+                <input
+                  type="text"
+                  value={projectState.argo.admin_password_last_applied_at || 'not applied yet'}
+                  readOnly
+                />
+              </div>
+            </div>
+
+            <div className="double-input-row">
+              <div className="form-group">
                 <label>NKS Cluster</label>
                 <input
                   type="text"
@@ -1466,7 +1532,7 @@ function App() {
                 </button>
               </div>
               <p className="env-import-note">
-                `IDEA_*` keys update project state for the selected app environment. `*_SECRET_REF` stores the logical secret name, while `IDEA_REPO_ACCESS_TOKEN_VALUE`, `IDEA_GITOPS_REPO_ACCESS_TOKEN_VALUE`, `IDEA_CLOUDFLARE_API_TOKEN_VALUE`, `IDEA_NCLOUD_ACCESS_KEY_VALUE`, and `IDEA_NCLOUD_SECRET_KEY_VALUE` carry the actual credentials used by tmp provisioning. Non-prefixed keys fill runtime env and secret values for the selected environment.
+                `IDEA_*` keys update project state for the selected app environment. `*_SECRET_REF` stores the logical secret name, while `IDEA_REPO_ACCESS_TOKEN_VALUE`, `IDEA_GITOPS_REPO_ACCESS_TOKEN_VALUE`, `IDEA_ARGO_ADMIN_PASSWORD_VALUE`, `IDEA_CLOUDFLARE_API_TOKEN_VALUE`, `IDEA_NCLOUD_ACCESS_KEY_VALUE`, and `IDEA_NCLOUD_SECRET_KEY_VALUE` carry the actual credentials used by tmp provisioning. Non-prefixed keys fill runtime env and secret values for the selected environment.
               </p>
             </div>
 
@@ -1554,14 +1620,22 @@ function App() {
           </div>
 
           <div className="action-row">
-            <button className="secondary-btn" onClick={handleSave} disabled={isSaving || isTargetOperationPending || isImportingEnv || isExportingEnv}>
+            <button className="secondary-btn" onClick={handleSave} disabled={isSaving || isTargetOperationPending || isImportingEnv || isExportingEnv || isApplyingArgoPassword}>
               {isSaving ? 'SAVING...' : 'SAVE STATE'}
+            </button>
+
+            <button
+              className="secondary-btn"
+              onClick={handleApplyArgoAdminPassword}
+              disabled={isSaving || isTargetOperationPending || isImportingEnv || isExportingEnv || isApplyingArgoPassword}
+            >
+              {isApplyingArgoPassword ? 'APPLYING ARGO PASSWORD...' : 'APPLY ARGO ADMIN PASSWORD'}
             </button>
 
             <button
               className="success-btn"
               onClick={() => handleTargetOperation('apply')}
-              disabled={isSaving || isTargetOperationPending || isImportingEnv || isExportingEnv}
+              disabled={isSaving || isTargetOperationPending || isImportingEnv || isExportingEnv || isApplyingArgoPassword}
             >
               {isProvisioningTarget ? `PROVISIONING ${activeEnv.toUpperCase()}...` : `PROVISION ${activeEnv.toUpperCase()} TARGET`}
             </button>
@@ -1569,7 +1643,7 @@ function App() {
             <button
               className="danger-btn"
               onClick={() => handleTargetOperation('destroy')}
-              disabled={isSaving || isTargetOperationPending || isImportingEnv || isExportingEnv || !canDestroyCurrentTarget}
+              disabled={isSaving || isTargetOperationPending || isImportingEnv || isExportingEnv || isApplyingArgoPassword || !canDestroyCurrentTarget}
             >
               {isDestroyingTarget ? `DESTROYING ${activeEnv.toUpperCase()}...` : `DESTROY ${activeEnv.toUpperCase()} TARGET`}
             </button>

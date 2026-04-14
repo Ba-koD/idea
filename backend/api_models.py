@@ -251,6 +251,8 @@ DEFAULT_PROJECT_STATE: Dict[str, Any] = {
         "gitops_repo_branch": "main",
         "gitops_repo_path": "gitops/apps",
         "gitops_repo_access_secret_ref": "gitops-repo-token",
+        "admin_password_secret_ref": "argocd-admin-password",
+        "admin_password_last_applied_at": "",
         "access_hint": "https://argo.rnen.kr",
     },
     "cloudflare": {
@@ -403,6 +405,8 @@ class ArgoConfig(BaseModel):
     gitops_repo_branch: str = "main"
     gitops_repo_path: str = "gitops/apps"
     gitops_repo_access_secret_ref: str = "gitops-repo-token"
+    admin_password_secret_ref: str = "argocd-admin-password"
+    admin_password_last_applied_at: str = ""
     access_hint: str = "https://argo.rnen.kr"
 
 
