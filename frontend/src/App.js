@@ -581,7 +581,6 @@ function App() {
   const [activeTargetOperation, setActiveTargetOperation] = useState('');
   const [isImportingEnv, setIsImportingEnv] = useState(false);
   const [isExportingEnv, setIsExportingEnv] = useState(false);
-  const [isApplyingArgoPassword, setIsApplyingArgoPassword] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [isToastExpanded, setIsToastExpanded] = useState(false);
   const [isToastDismissed, setIsToastDismissed] = useState(false);
@@ -741,45 +740,6 @@ function App() {
       setStatusMessage(`Save failed: ${error.message}`);
     } finally {
       setIsSaving(false);
-    }
-  }
-
-  async function handleApplyArgoAdminPassword() {
-    setIsApplyingArgoPassword(true);
-    setStatusMessage('');
-
-    try {
-      const saved = await persistProjectState();
-      const response = await fetch(buildApiUrl('/argo-admin-password/apply'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(saved)
-      });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.detail || `argo-admin-password apply failed with ${response.status}`);
-      }
-
-      const nextState = normalizeProjectState(payload.project_state || saved);
-      setProjectState(nextState);
-      setStateSource('backend');
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
-      setEnvLogs((currentLogs) => ({
-        ...currentLogs,
-        [activeEnv]: [
-          ...(currentLogs[activeEnv] || []),
-          ...((payload.logs || []).map((entry) => String(entry)))
-        ]
-      }));
-      setStatusMessage(payload.message || 'Argo CD admin password updated.');
-    } catch (error) {
-      setEnvLogs((currentLogs) => ({
-        ...currentLogs,
-        [activeEnv]: appendLogMessage(currentLogs[activeEnv] || [], `Argo admin password apply failed: ${error.message}`)
-      }));
-      setStatusMessage(`Argo admin password apply failed: ${error.message}`);
-    } finally {
-      setIsApplyingArgoPassword(false);
     }
   }
 
@@ -1457,6 +1417,7 @@ function App() {
                 'Legacy SVR.* node product codes are normalized to valid NKS serverSpecCode values automatically.',
                 'login_key_name is created automatically if it does not exist yet.',
                 'Provisioning also tries to register the new cluster into the platform Argo CD automatically.',
+                'If IDEA_ARGO_ADMIN_PASSWORD_VALUE is present, provisioning also updates the platform Argo CD admin password automatically.',
                 'If Cloudflare control-plane values are present, provisioning also tries to reconcile argo.rnen.kr automatically.',
                 'If cluster_uuid / vpc_no / subnet_no stay as placeholders, Terraform creates new target resources.',
                 'If you want to reuse existing infra, replace those fields with real numeric ids or an existing cluster UUID.'
@@ -1620,22 +1581,14 @@ function App() {
           </div>
 
           <div className="action-row">
-            <button className="secondary-btn" onClick={handleSave} disabled={isSaving || isTargetOperationPending || isImportingEnv || isExportingEnv || isApplyingArgoPassword}>
+            <button className="secondary-btn" onClick={handleSave} disabled={isSaving || isTargetOperationPending || isImportingEnv || isExportingEnv}>
               {isSaving ? 'SAVING...' : 'SAVE STATE'}
-            </button>
-
-            <button
-              className="secondary-btn"
-              onClick={handleApplyArgoAdminPassword}
-              disabled={isSaving || isTargetOperationPending || isImportingEnv || isExportingEnv || isApplyingArgoPassword}
-            >
-              {isApplyingArgoPassword ? 'APPLYING ARGO PASSWORD...' : 'APPLY ARGO ADMIN PASSWORD'}
             </button>
 
             <button
               className="success-btn"
               onClick={() => handleTargetOperation('apply')}
-              disabled={isSaving || isTargetOperationPending || isImportingEnv || isExportingEnv || isApplyingArgoPassword}
+              disabled={isSaving || isTargetOperationPending || isImportingEnv || isExportingEnv}
             >
               {isProvisioningTarget ? `PROVISIONING ${activeEnv.toUpperCase()}...` : `PROVISION ${activeEnv.toUpperCase()} TARGET`}
             </button>
@@ -1643,7 +1596,7 @@ function App() {
             <button
               className="danger-btn"
               onClick={() => handleTargetOperation('destroy')}
-              disabled={isSaving || isTargetOperationPending || isImportingEnv || isExportingEnv || isApplyingArgoPassword || !canDestroyCurrentTarget}
+              disabled={isSaving || isTargetOperationPending || isImportingEnv || isExportingEnv || !canDestroyCurrentTarget}
             >
               {isDestroyingTarget ? `DESTROYING ${activeEnv.toUpperCase()}...` : `DESTROY ${activeEnv.toUpperCase()} TARGET`}
             </button>

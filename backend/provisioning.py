@@ -1652,6 +1652,23 @@ def provision_ncloud_target(
             f"Reason: {exc}"
         )
 
+    argo_admin_password_ref = str(state.get("argo", {}).get("admin_password_secret_ref", "")).strip()
+    argo_admin_password_value = resolve_secret_value(state, argo_admin_password_ref) if argo_admin_password_ref else ""
+    if argo_admin_password_ref and not looks_like_placeholder(argo_admin_password_value):
+        try:
+            state, argo_password_result = apply_argocd_admin_password(state)
+            integration_logs.extend(argo_password_result["logs"])
+        except Exception as exc:
+            integration_warnings.append(
+                "Automatic Argo CD admin password apply did not complete. "
+                f"Reason: {exc}"
+            )
+    elif argo_admin_password_ref:
+        integration_warnings.append(
+            "Automatic Argo CD admin password apply was skipped because IDEA_ARGO_ADMIN_PASSWORD_VALUE "
+            "is missing or still a placeholder."
+        )
+
     try:
         cloudflare_result = reconcile_cloudflare_argocd_access(state)
         integration_logs.extend(cloudflare_result.get("logs", []))
