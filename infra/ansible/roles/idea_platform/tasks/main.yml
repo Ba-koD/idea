@@ -87,6 +87,46 @@
     state: directory
     mode: "0755"
 
+- name: Create Docker config directory for non-interactive builds
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.file:
+    path: "{{ idea_docker_config_dir }}"
+    state: directory
+    mode: "0700"
+
+- name: Write empty Docker config to bypass macOS keychain helper
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.copy:
+    dest: "{{ idea_docker_config_dir }}/config.json"
+    content: |
+      {}
+    mode: "0600"
+
+- name: Pull frontend base images without Docker Desktop keychain integration
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - docker
+      - pull
+      - "{{ item }}"
+  loop:
+    - node:22-alpine
+    - nginx:1.27-alpine
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    DOCKER_CONFIG: "{{ idea_docker_config_dir }}"
+
+- name: Pull backend base image without Docker Desktop keychain integration
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - docker
+      - pull
+      - python:3.12-slim
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    DOCKER_CONFIG: "{{ idea_docker_config_dir }}"
+
 - name: Sync frontend source to target build workspace
   become: "{{ ansible_system != 'Darwin' }}"
   ansible.builtin.copy:
@@ -112,6 +152,7 @@
       - "{{ idea_build_workspace }}/frontend"
   environment:
     PATH: "{{ platform_cli_path }}"
+    DOCKER_CONFIG: "{{ idea_docker_config_dir }}"
 
 - name: Build platform backend image from repo source
   become: "{{ ansible_system != 'Darwin' }}"
@@ -124,6 +165,7 @@
       - "{{ idea_build_workspace }}/backend"
   environment:
     PATH: "{{ platform_cli_path }}"
+    DOCKER_CONFIG: "{{ idea_docker_config_dir }}"
 
 - name: Load platform frontend image into kind
   become: "{{ ansible_system != 'Darwin' }}"
