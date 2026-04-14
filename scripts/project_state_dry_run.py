@@ -43,6 +43,19 @@ def require_keys(obj: dict, keys: list[str], prefix: str) -> None:
             fail(f"missing required field: {prefix}{key}")
 
 
+def build_hostname(subdomain: str, base_domain: str) -> str:
+    normalized_base = (base_domain or "").strip().lower()
+    normalized_subdomain = (subdomain or "").strip().lower()
+
+    if not normalized_base:
+        return ""
+
+    if normalized_subdomain in {"", "@", "*"}:
+        return normalized_base
+
+    return f"{normalized_subdomain}.{normalized_base}"
+
+
 def run(cmd: list[str], cwd: Path | None = None) -> str:
     result = subprocess.run(
         cmd,
@@ -88,6 +101,27 @@ def collect_secret_refs(state: dict) -> list[str]:
                 refs.add(value)
 
     return sorted(refs)
+
+
+def normalized_cloudflare_environments(cloudflare: dict) -> dict[str, dict]:
+    environments = dict(cloudflare.get("environments") or {})
+
+    if environments:
+      for env_name in ["dev", "stage", "prod"]:
+          environments.setdefault(env_name, {})
+      return environments
+
+    base_domain = cloudflare.get("base_domain", "")
+    prefix = cloudflare.get("public_subdomain_prefix", "")
+    legacy_suffix = {"dev": "-dev", "stage": "-stage", "prod": ""}
+
+    return {
+        env_name: {
+            "subdomain": f"{prefix}{legacy_suffix[env_name]}" if prefix else "",
+            "base_domain": base_domain,
+        }
+        for env_name in ["dev", "stage", "prod"]
+    }
 
 
 def main() -> None:
@@ -136,8 +170,6 @@ def main() -> None:
             "enabled",
             "account_id",
             "zone_id",
-            "base_domain",
-            "public_subdomain_prefix",
             "api_token_secret_ref",
             "tunnel_name",
             "route_mode",
@@ -156,6 +188,25 @@ def main() -> None:
         ],
         "routing.",
     )
+
+    cloudflare_environments = normalized_cloudflare_environments(cloudflare)
+    require_keys(cloudflare_environments, ["dev", "stage", "prod"], "cloudflare.environments.")
+
+    for env_name in ["dev", "stage", "prod"]:
+        require_keys(
+            cloudflare_environments[env_name],
+            ["subdomain", "base_domain"],
+            f"cloudflare.environments.{env_name}.",
+        )
+        expected_hostname = build_hostname(
+            cloudflare_environments[env_name]["subdomain"],
+            cloudflare_environments[env_name]["base_domain"],
+        )
+        if routing.get(f"{env_name}_hostname") != expected_hostname:
+            fail(
+                f"routing.{env_name}_hostname does not match cloudflare.environments.{env_name}: "
+                f"{routing.get(f'{env_name}_hostname')} != {expected_hostname}"
+            )
 
     for env_name in ["dev", "stage", "prod"]:
         if env_name not in state["targets"]:
@@ -219,8 +270,7 @@ def main() -> None:
             },
             "cloudflare": {
                 "enabled": cloudflare["enabled"],
-                "base_domain": cloudflare["base_domain"],
-                "public_subdomain_prefix": cloudflare["public_subdomain_prefix"],
+                "environments": cloudflare_environments,
                 "tunnel_name": cloudflare["tunnel_name"],
                 "route_mode": cloudflare["route_mode"],
             },

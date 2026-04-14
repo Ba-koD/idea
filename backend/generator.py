@@ -1,41 +1,56 @@
-import os
-import shutil
-import tempfile
+import json
 from pathlib import Path
+
 from jinja2 import Environment, FileSystemLoader
 
-# 템플릿 폴더 위치 설정
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 env_loader = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)))
 
-def generate_all(data):
-    """
-    설계도의 Step 3: GitOps 리소스(K8s YAML) 생성 로직
-    """
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        # 1. 생성할 K8s 매니페스트 목록 (테라폼 대신 YAML)
-        templates = ["deployment.yaml.j2", "service.yaml.j2"]
-        
-        # 2. Jinja2 렌더링
-        for t_name in templates:
-            try:
-                template = env_loader.get_template(t_name)
-                # UI에서 받은 데이터를 주입
-                output_content = template.render(data.model_dump())
-                
-                output_file_name = t_name.replace(".j2", "")
-                with open(os.path.join(tmp_dir, output_file_name), "w") as f:
-                    f.write(output_content)
-            except Exception as e:
-                print(f"Template Error ({t_name}): {str(e)}")
-        
-        # 3. 결과물 저장 경로 (설계도 상의 GitOps repo/path 구조 준비)
-        output_base_dir = os.path.join("outputs", data.project_name, data.env_type)
-        if not os.path.exists(output_base_dir):
-            os.makedirs(output_base_dir, exist_ok=True)
-            
-        # 4. 파일 복사
-        for file_name in os.listdir(tmp_dir):
-            shutil.copy(os.path.join(tmp_dir, file_name), os.path.join(output_base_dir, file_name))
-        
-        return output_base_dir
+
+def env_block(env_map: dict[str, str]) -> str:
+    return "\n".join(f"{key}={value}" for key, value in sorted(env_map.items()))
+
+
+def render_template(template_name: str, context: dict) -> str:
+    template = env_loader.get_template(template_name)
+    return template.render(**context).strip() + "\n"
+
+
+def generate_all(project_state: dict, selected_env: str) -> Path:
+    project = project_state["project"]
+    argo = project_state["argo"]
+    target = project_state["targets"][selected_env]
+    cloudflare_env = project_state["cloudflare"]["environments"][selected_env]
+    hostname = project_state["routing"][f"{selected_env}_hostname"]
+    output_dir = Path("outputs") / project["name"] / selected_env
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    context = {
+        "project": project,
+        "argo": argo,
+        "target": target,
+        "cloudflare": project_state["cloudflare"],
+        "cloudflare_env": cloudflare_env,
+        "routing": project_state["routing"],
+        "access": project_state["access"],
+        "delivery": project_state["delivery"],
+        "selected_env": selected_env,
+        "hostname": hostname,
+        "runtime_env_block": env_block(project_state["env"][selected_env]),
+        "runtime_secrets_block": env_block(project_state["secrets"][selected_env]),
+        "project_state_json": json.dumps(project_state, indent=2, ensure_ascii=True),
+    }
+
+    rendered_files = {
+        "namespace.yaml": render_template("namespace.yaml.j2", context),
+        "argocd-application.yaml": render_template("argocd-application.yaml.j2", context),
+        "runtime-configmap.yaml": render_template("runtime-configmap.yaml.j2", context),
+        "deploy-summary.txt": render_template("deploy-summary.txt.j2", context),
+        "runtime-project-input.json": context["project_state_json"] + "\n",
+        "project-state.json": context["project_state_json"] + "\n",
+    }
+
+    for file_name, content in rendered_files.items():
+        (output_dir / file_name).write_text(content, encoding="utf-8")
+
+    return output_dir

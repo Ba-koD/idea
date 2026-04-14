@@ -1,0 +1,15 @@
+project={{ project.name }}
+selected_env={{ selected_env }}
+app_repo_url={{ project.app_repo_url }}
+git_ref={{ project.git_ref }}
+hostname={{ hostname }}
+nks_cluster={{ target.ncloud.cluster_name }}
+namespace={{ target.namespace }}
+service_port={{ target.service_port }}
+cloudflare_tunnel={{ cloudflare.tunnel_name }}
+argo_project={{ argo.project_name }}
+argo_destination={{ argo.destination_name }}
+argo_gitops_repo={{ argo.gitops_repo_url }}
+argo_gitops_branch={{ argo.gitops_repo_branch }}
+argo_gitops_path={{ argo.gitops_repo_path }}/{{ selected_env }}
+argo_access_hint={{ argo.access_hint }}

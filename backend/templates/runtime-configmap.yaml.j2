@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ project.name }}-{{ selected_env }}-runtime
+  namespace: {{ target.namespace }}
+  labels:
+    idea.rnen.kr/project: {{ project.name }}
+    idea.rnen.kr/environment: {{ selected_env }}
+data:
+  APP_HOSTNAME: "{{ hostname }}"
+  APP_REPOSITORY_URL: "{{ project.app_repo_url }}"
+  GIT_REF: "{{ project.git_ref }}"
+  ENTRY_SERVICE_NAME: "{{ routing.entry_service_name }}"
+  BACKEND_SERVICE_NAME: "{{ routing.backend_service_name }}"
+  BACKEND_BASE_PATH: "{{ routing.backend_base_path }}"
+  CLOUDFLARE_TUNNEL_NAME: "{{ cloudflare.tunnel_name }}"
+  CLOUDFLARE_BASE_DOMAIN: "{{ cloudflare_env.base_domain }}"
+  CLOUDFLARE_SUBDOMAIN: "{{ cloudflare_env.subdomain }}"
+  HEALTHCHECK_PATH: "{{ delivery.healthcheck_path }}"
+  ADMIN_ALLOWED_SOURCE_IPS: "{{ access.admin_allowed_source_ips | join(',') }}"
+  ENV_ALLOWED_SOURCE_IPS: "{{ access[selected_env ~ '_allowed_source_ips'] | join(',') }}"
+  runtime.env: |
+{% for line in runtime_env_block.split('\n') %}
+    {{ line }}
+{% endfor %}
+  runtime.secrets: |
+{% for line in runtime_secrets_block.split('\n') %}
+    {{ line }}
+{% endfor %}
+  project-state.json: |
+{% for line in project_state_json.split('\n') %}
+    {{ line }}
+{% endfor %}

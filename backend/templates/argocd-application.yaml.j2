@@ -1,0 +1,24 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ project.name }}-{{ selected_env }}
+  namespace: argocd
+  labels:
+    idea.rnen.kr/project: {{ project.name }}
+    idea.rnen.kr/environment: {{ selected_env }}
+spec:
+  project: {{ argo.project_name }}
+  destination:
+    name: {{ argo.destination_name }}
+    namespace: {{ target.namespace }}
+    server: {{ argo.destination_server }}
+  source:
+    repoURL: {{ argo.gitops_repo_url }}
+    targetRevision: {{ argo.gitops_repo_branch }}
+    path: {{ argo.gitops_repo_path }}/{{ selected_env }}
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
