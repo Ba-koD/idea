@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ project_name }}-app
+  namespace: {{ env_type }}
+  labels:
+    app: {{ project_name }}
+    env: {{ env_type }}
+spec:
+  replicas: {{ replica }}
+  selector:
+    matchLabels:
+      app: {{ project_name }}
+  template:
+    metadata:
+      labels:
+        app: {{ project_name }}
+    spec:
+      containers:
+      - name: main-container
+        image: {{ repo_url }}:latest  # 실제 운영 시 빌드된 이미지 태그 연동
+        ports:
+        - containerPort: 8080
+        env:
+        {% for line in env_vars.split('\n') %}
+        {% if line and '=' in line %}
+        - name: {{ line.split('=')[0] | trim }}
+          value: "{{ line.split('=')[1] | trim }}"
+        {% endif %}
+        {% endfor %}

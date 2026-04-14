@@ -1,0 +1,224 @@
+:root {
+  --primary: #3b82f6;
+  --dev-color: #3b82f6;
+  --stage-color: #f59e0b;
+  --prod-color: #10b981;
+  --bg-dark: #0f172a;
+  --card-bg: #1e293b;
+  --text-main: #f8fafc;
+  --border-color: rgba(255, 255, 255, 0.1);
+  --console-bg: #111827;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-dark);
+  color: var(--text-main);
+  font-family: 'Pretendard', -apple-system, sans-serif;
+  overflow: hidden; 
+}
+
+/* 🎨 다크 테마 커스텀 스크롤바 */
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+.app-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.app-header {
+  padding: 0.6rem 2rem;
+  background: var(--card-bg);
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 60px;
+}
+
+.version-tag {
+  font-size: 0.7rem;
+  background: var(--primary);
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-left: 10px;
+  vertical-align: middle;
+}
+
+.header-right-status { display: flex; align-items: center; }
+.live-status { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #10b981; font-weight: 600; background: rgba(16, 185, 129, 0.1); padding: 6px 12px; border-radius: 20px; border: 1px solid rgba(16, 185, 129, 0.2); }
+
+.content-layout {
+  display: flex;
+  flex: 1;
+  padding: 15px;
+  gap: 15px;
+  overflow: hidden; 
+}
+
+.sidebar {
+  width: 360px;
+  background: var(--card-bg);
+  padding: 18px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto; 
+}
+
+.sidebar-title { margin-top: 0; font-size: 1.1rem; color: #e2e8f0; }
+.form-section-title { margin-top: 10px; font-size: 0.85rem; color: #e2e8f0; font-weight: 700; border-bottom: 1px solid #334155; padding-bottom: 5px; }
+
+.animate-fade { animation: fadeIn 0.3s ease-in-out; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+
+.env-selector { display: flex; gap: 6px; margin-bottom: 15px; }
+.env-btn { flex: 1; padding: 8px 0; border-radius: 6px; font-size: 0.75rem; cursor: pointer; border: none; background: #334155; color: #94a3b8; transition: all 0.2s ease;}
+.env-btn.selected.dev { background: var(--dev-color); color: white; }
+.env-btn.selected.stage { background: var(--stage-color); color: white; }
+.env-btn.selected.prod { background: var(--prod-color); color: white; }
+
+.config-card { display: flex; flex-direction: column; gap: 12px; }
+.form-group { display: flex; flex-direction: column; gap: 4px; }
+.form-group label { font-size: 0.7rem; color: #94a3b8; font-weight: 600; text-transform: uppercase; }
+.form-group input, .form-group textarea { background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; padding: 8px; font-size: 0.8rem; font-family: 'JetBrains Mono', monospace; }
+textarea { resize: none; color: #4ade80 !important; }
+
+.main-deploy-btn { margin-top: 15px; padding: 12px; border-radius: 8px; color: white; font-size: 1rem; font-weight: 800; border: none; cursor: pointer; transition: transform 0.1s; }
+.main-deploy-btn:active { transform: scale(0.98); }
+
+.download-btn-link { transition: all 0.2s ease; }
+.download-btn-link:hover { background-color: #059669 !important; transform: translateY(-2px); }
+.download-btn-link:active { transform: scale(0.98); }
+
+/* ====================================================
+   메인 뷰 스크롤 및 다이어그램 최적화
+   ==================================================== */
+
+.main-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  overflow-y: auto; 
+  padding-right: 10px; 
+}
+
+.view-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0; 
+}
+
+.live-badge {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 0.7rem;
+  font-weight: bold;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+/* 다이어그램 영역 */
+.mermaid-wrapper {
+  background: #f8fafc !important;
+  background-image: 
+    linear-gradient(#e2e8f0 1px, transparent 1px),
+    linear-gradient(90deg, #e2e8f0 1px, transparent 1px);
+  background-size: 30px 30px; 
+  border-radius: 12px;
+  flex-shrink: 0; 
+  height: 500px; 
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid #cbd5e1;
+  box-shadow: inset 0 2px 8px rgba(0,0,0,0.05);
+}
+
+/* SVG 내부 가독성 및 텍스트 짤림 방지 */
+.mermaid-wrapper svg {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  padding: 40px; 
+  box-sizing: border-box;
+  overflow: visible !important;
+}
+
+/* 💡 핵심 수정: 노드 라벨 텍스트가 박스 안에서 짤리지 않도록 강제 설정 */
+.mermaid .node foreignObject {
+  overflow: visible !important;
+}
+
+.mermaid .node .label {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  padding: 0 15px !important; /* 텍스트 좌우 여백을 더 넉넉하게 확장 */
+  text-align: center;
+  min-width: 80px; /* 노드의 최소 너비 확보 */
+}
+
+.mermaid .node label {
+  font-weight: bold !important;
+  line-height: 1.6 !important; /* 가독성을 위해 행간 소폭 증가 */
+  word-break: keep-all; 
+}
+
+/* 시스템 콘솔 영역 */
+.console-wrapper {
+  flex-shrink: 0; 
+  height: 350px; 
+  background: var(--console-bg);
+  border-radius: 12px;
+  border: 1px solid #334155;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.console-header {
+  background: #1e293b;
+  color: #94a3b8;
+  font-size: 0.7rem;
+  padding: 8px 12px;
+  border-bottom: 1px solid #334155;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.console-content {
+  flex: 1;
+  padding: 12px;
+  overflow-y: auto;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: #d1d5db;
+}
+
+/* 하단 상태바 */
+.status-bar {
+  flex-shrink: 0;
+  background: var(--card-bg);
+  padding: 12px 20px;
+  display: flex;
+  gap: 25px;
+  font-size: 0.8rem;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+}
+
+.status-bar p { margin: 0; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.status-dot.green { background: #10b981; box-shadow: 0 0 8px #10b981; }

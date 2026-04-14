@@ -8,3 +8,40 @@ infra/ansible/generated/
 *.retry
 .env
 node_modules/
+
+# --- Frontend (React) ---
+frontend/node_modules/
+frontend/build/
+frontend/.env
+frontend/.env.local
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+
+# --- Backend (FastAPI / Python) ---
+backend/__pycache__/
+backend/*.py[cod]
+backend/*$py.class
+backend/.pytest_cache/
+backend/venv/
+backend/env/
+backend/.env
+
+# --- Project Outputs & Templates ---
+# 빌드 결과물이나 임시 ZIP 파일이 저장소에 올라가지 않도록 설정
+backend/outputs/
+*.zip
+*.tar.gz
+
+# --- OS & IDE Files ---
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.bak
+
+# --- Infrastructure Secrets (중요!) ---
+# 실수로라도 인증키가 포함된 파일이 올라가는 것을 방지
+*.pem
+*.key
+*.pub
