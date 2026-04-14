@@ -1,4 +1,4 @@
-name: Deploy Platform MVP
+name: Manage Platform MVP
 
 on:
   push:
@@ -8,8 +8,16 @@ on:
       - .github/workflows/platform-deploy.yml
   workflow_dispatch:
     inputs:
+      operation:
+        description: "Platform operation."
+        required: true
+        type: choice
+        options:
+          - apply
+          - destroy
+        default: apply
       ansible_tags:
-        description: "Optional comma-separated Ansible tags."
+        description: "Optional comma-separated Ansible tags for apply."
         required: false
         default: ""
 
@@ -108,6 +116,7 @@ jobs:
             'uname -s && id -un'
 
       - name: Preflight Cloudflare API access
+        if: ${{ github.event.inputs.operation != 'destroy' }}
         env:
           PLATFORM_ENABLE_CLOUDFLARED: ${{ vars.PLATFORM_ENABLE_CLOUDFLARED }}
           PLATFORM_CLOUDFLARE_API_TOKEN: ${{ secrets.PLATFORM_CLOUDFLARE_API_TOKEN }}
@@ -350,7 +359,7 @@ jobs:
           Path("github.auto.tfvars.json").write_text(json.dumps(tfvars, indent=2) + "\n", encoding="utf-8")
           PY
 
-      - name: Terraform apply
+      - name: Terraform prepare contract state
         working-directory: infra/terraform
         run: terraform apply -auto-approve -var-file=github.auto.tfvars.json
 
@@ -362,6 +371,7 @@ jobs:
           terraform output -json ansible_extra_vars > ../ansible/generated/extra-vars.json
 
       - name: Run Ansible platform install
+        if: ${{ github.event.inputs.operation != 'destroy' }}
         working-directory: infra/ansible
         run: |
           if [ -n "${{ github.event.inputs.ansible_tags }}" ]; then
@@ -369,3 +379,13 @@ jobs:
           else
             ansible-playbook -i generated/inventory.ini site.yml --extra-vars @generated/extra-vars.json
           fi
+
+      - name: Run Ansible platform destroy
+        if: ${{ github.event.inputs.operation == 'destroy' }}
+        working-directory: infra/ansible
+        run: ansible-playbook -i generated/inventory.ini destroy.yml --extra-vars @generated/extra-vars.json
+
+      - name: Terraform destroy contract state
+        if: ${{ github.event.inputs.operation == 'destroy' }}
+        working-directory: infra/terraform
+        run: terraform destroy -auto-approve -var-file=github.auto.tfvars.json

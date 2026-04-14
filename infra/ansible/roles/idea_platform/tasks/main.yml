@@ -93,6 +93,34 @@
     PATH: "{{ platform_cli_path }}"
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
+- name: Restart backend deployment to reload ConfigMap-backed source
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - rollout
+      - restart
+      - "deployment/{{ idea_backend_name }}"
+      - -n
+      - "{{ idea_namespace }}"
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+- name: Restart frontend deployment to reload ConfigMap-backed assets
+  become: "{{ ansible_system != 'Darwin' }}"
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - rollout
+      - restart
+      - "deployment/{{ idea_frontend_name }}"
+      - -n
+      - "{{ idea_namespace }}"
+  environment:
+    PATH: "{{ platform_cli_path }}"
+    KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
 - name: Wait for frontend rollout
   become: "{{ ansible_system != 'Darwin' }}"
   ansible.builtin.command:

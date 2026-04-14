@@ -1,0 +1,47 @@
+- name: Destroy idea platform MVP runtime
+  hosts: platform_targets
+  become: false
+  gather_facts: true
+  vars_files:
+    - vars/platform.defaults.yml
+
+  pre_tasks:
+    - name: Assert supported operating system
+      ansible.builtin.assert:
+        that:
+          - ansible_system in ["Linux", "Darwin"]
+          - ansible_system != "Linux" or (ansible_os_family == "Debian" and ansible_distribution == "Ubuntu")
+        fail_msg: "This MVP destroy playbook currently supports Ubuntu Linux and macOS only."
+
+    - name: Check existing kind clusters
+      become: "{{ ansible_system != 'Darwin' }}"
+      ansible.builtin.command:
+        argv:
+          - kind
+          - get
+          - clusters
+      register: kind_clusters
+      changed_when: false
+      failed_when: false
+      environment:
+        PATH: "{{ platform_cli_path }}"
+        KUBECONFIG: "{{ platform_kubeconfig_path }}"
+
+    - name: Detect managed kind cluster presence
+      ansible.builtin.set_fact:
+        platform_kind_cluster_present: "{{ kind_clusters.rc == 0 and (kind_cluster_name in kind_clusters.stdout_lines) }}"
+
+  tasks:
+    - name: Delete managed kind cluster
+      become: "{{ ansible_system != 'Darwin' }}"
+      ansible.builtin.command:
+        argv:
+          - kind
+          - delete
+          - cluster
+          - --name
+          - "{{ kind_cluster_name }}"
+      when: platform_kind_cluster_present
+      environment:
+        PATH: "{{ platform_cli_path }}"
+        KUBECONFIG: "{{ platform_kubeconfig_path }}"
