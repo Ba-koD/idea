@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import ssl
 import subprocess
 from copy import deepcopy
@@ -946,6 +947,25 @@ def read_terraform_state(runtime_dir: Path) -> dict[str, Any]:
         return {}
 
 
+def runtime_state_has_managed_resources(runtime_dir: Path) -> bool:
+    state_payload = read_terraform_state(runtime_dir)
+    destroyable_resource_types = {
+        "ncloud_vpc",
+        "ncloud_subnet",
+        "ncloud_nks_cluster",
+        "ncloud_nks_node_pool",
+        "ncloud_login_key",
+    }
+    for resource in state_payload.get("resources", []):
+        if resource.get("mode", "managed") != "managed":
+            continue
+        if resource.get("type") not in destroyable_resource_types:
+            continue
+        if resource.get("instances"):
+            return True
+    return False
+
+
 def first_resource_attributes(state_payload: dict[str, Any], resource_type: str, resource_name: str) -> dict[str, Any]:
     for resource in state_payload.get("resources", []):
         if resource.get("type") != resource_type or resource.get("name") != resource_name:
@@ -1233,6 +1253,56 @@ def write_runtime_terraform_files(runtime_dir: Path, tfvars: dict[str, Any]) -> 
     )
 
 
+def reset_ncloud_target_runtime_state(state: dict[str, Any], selected_env: str) -> None:
+    ncloud = state["targets"][selected_env]["ncloud"]
+    ncloud["cluster_uuid"] = ""
+    ncloud["cluster_endpoint"] = ""
+    ncloud["vpc_no"] = f"vpc-{selected_env}"
+    ncloud["subnet_no"] = f"subnet-{selected_env}"
+    ncloud["lb_subnet_no"] = f"lb-subnet-{selected_env}"
+    ncloud["lb_public_subnet_no"] = ""
+    ncloud["node_pool_id"] = ""
+    state["argo"]["destination_server"] = "https://kubernetes.default.svc"
+
+
+def remove_runtime_artifacts(runtime_dir: Path, login_key_name: str) -> None:
+    for file_name in ("kubeconfig.yaml", "argocd-cluster-secret.yaml", "terraform.tfplan"):
+        target = runtime_dir / file_name
+        if target.exists():
+            try:
+                target.unlink()
+            except OSError:
+                pass
+    login_key_path = runtime_dir / f"{login_key_name}.pem"
+    if login_key_path.exists():
+        try:
+            login_key_path.unlink()
+        except OSError:
+            pass
+
+
+def delete_argocd_cluster_secret_from_platform(cluster_name: str, selected_env: str) -> dict[str, Any]:
+    secret_name = f"argocd-cluster-{selected_env}-{cluster_name}"
+    secret_path = f"/api/v1/namespaces/argocd/secrets/{quote(secret_name, safe='')}"
+    existing = kube_api_request(secret_path, expected_statuses=(200, 404))
+
+    if existing["status"] == 404:
+        return {
+            "applied": False,
+            "secret_name": secret_name,
+            "action": "noop",
+            "logs": [f"Argo CD cluster secret {secret_name} was already absent from the platform cluster."],
+        }
+
+    kube_api_request(secret_path, method="DELETE", expected_statuses=(200, 202))
+    return {
+        "applied": True,
+        "secret_name": secret_name,
+        "action": "deleted",
+        "logs": [f"Argo CD cluster secret {secret_name} deleted from the platform cluster."],
+    }
+
+
 def provision_ncloud_target(
     project_state: dict[str, Any],
     selected_env: str,
@@ -1406,6 +1476,9 @@ def provision_ncloud_target(
     state["argo"]["destination_server"] = outputs["cluster_endpoint"]
     state["argo"]["access_hint"] = normalize_argocd_access_hint(state)
     state.setdefault("provisioning", {}).setdefault("last_results", {})[selected_env] = {
+        "status": "provisioned",
+        "operation": "apply",
+        "provisioned": True,
         "applied_at": datetime.now(timezone.utc).isoformat(),
         "runtime_dir": str(runtime_dir),
         "kubeconfig_path": str(kubeconfig_path),
@@ -1415,6 +1488,7 @@ def provision_ncloud_target(
         "cluster_endpoint": outputs["cluster_endpoint"],
         "integration_logs": integration_logs,
         "integration_warnings": integration_warnings,
+        "logs_tail": logs[-80:],
     }
 
     emit(f"Wrote kubeconfig to {kubeconfig_path}.")
@@ -1435,4 +1509,155 @@ def provision_ncloud_target(
         "logs": logs,
         "outputs": outputs,
         "warnings": integration_warnings,
+    }
+
+
+def destroy_ncloud_target(
+    project_state: dict[str, Any],
+    selected_env: str,
+    output_root: Path,
+    apply: bool = True,
+    log_callback: Callable[[str], None] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    state = deepcopy(project_state)
+    project = state["project"]
+    target = state["targets"][selected_env]
+    if target.get("provider") != "ncloud" or target.get("cluster_type") != "nks":
+        raise ValueError("Only provider=ncloud and cluster_type=nks are supported by runtime destroy.")
+
+    runtime_dir = ensure_runtime_dir(output_root, project["name"], selected_env)
+    state, _ = recover_state_from_runtime_artifacts(state, selected_env, output_root, log_callback=log_callback)
+
+    ncloud = state["targets"][selected_env]["ncloud"]
+    access_key_ref = ncloud.get("access_key_secret_ref", "")
+    secret_key_ref = ncloud.get("secret_key_secret_ref", "")
+    access_key = resolve_secret_value(state, access_key_ref)
+    secret_key = resolve_secret_value(state, secret_key_ref)
+    missing_refs: list[dict[str, str]] = []
+
+    if not access_key:
+        missing_refs.append({"ref": access_key_ref, "env": secret_env_var_name(access_key_ref)})
+    if not secret_key:
+        missing_refs.append({"ref": secret_key_ref, "env": secret_env_var_name(secret_key_ref)})
+    if missing_refs:
+        raise ValueError(
+            "Missing provisioning secret values for: "
+            + ", ".join(f"{item['ref']} (env {item['env']})" for item in missing_refs)
+        )
+
+    if not runtime_state_has_managed_resources(runtime_dir):
+        raise ValueError(
+            "Destroy is only available when this environment still has a tracked Terraform runtime state. "
+            "The current target is in reuse/import mode only, so automatic destroy would be unsafe."
+        )
+
+    tfvars = build_runtime_tfvars(state, selected_env)
+    validate_ncloud_preflight(tfvars, access_key_ref, access_key, secret_key_ref, secret_key)
+    write_runtime_terraform_files(runtime_dir, tfvars)
+
+    command_env = {
+        **os.environ,
+        "NCLOUD_ACCESS_KEY": access_key,
+        "NCLOUD_SECRET_KEY": secret_key,
+        "NCLOUD_REGION": tfvars["region"],
+        "TF_IN_AUTOMATION": "1",
+    }
+    terraform_bin = state.get("provisioning", {}).get("terraform_executable", "terraform")
+    logs: list[str] = []
+
+    def emit(message: str) -> None:
+        logs.append(message)
+        if log_callback is not None:
+            log_callback(message)
+
+    emit(f"Prepared Terraform runtime in {runtime_dir}.")
+    emit(
+        f"Destroying Ncloud target cluster_name={tfvars['cluster_name']} "
+        f"cluster_uuid={tfvars['existing_cluster_uuid'] or '(tracked state)'}."
+    )
+    emit("Running terraform init.")
+    init_result = run_command([terraform_bin, "init", "-backend=false"], runtime_dir, command_env, log_callback=log_callback)
+    if init_result.returncode != 0:
+        raise RuntimeError(f"terraform init failed:\n{init_result.stderr.strip() or init_result.stdout.strip()}")
+    emit("terraform init completed.")
+
+    emit("Running terraform validate.")
+    validate_result = run_command([terraform_bin, "validate"], runtime_dir, command_env, log_callback=log_callback)
+    if validate_result.returncode != 0:
+        raise RuntimeError(f"terraform validate failed:\n{validate_result.stderr.strip() or validate_result.stdout.strip()}")
+    emit("terraform validate completed.")
+
+    if not apply:
+        emit("Running terraform plan -destroy.")
+        plan_result = run_command(
+            [terraform_bin, "plan", "-destroy"],
+            runtime_dir,
+            command_env,
+            log_callback=log_callback,
+        )
+        if plan_result.returncode != 0:
+            raise RuntimeError(f"terraform plan -destroy failed:\n{plan_result.stderr.strip() or plan_result.stdout.strip()}")
+        emit("terraform plan -destroy completed.")
+        return state, {
+            "applied": False,
+            "destroyed": False,
+            "runtime_dir": str(runtime_dir),
+            "logs": logs,
+            "warnings": [],
+        }
+
+    integration_logs: list[str] = []
+    integration_warnings: list[str] = []
+    try:
+        platform_argocd_result = delete_argocd_cluster_secret_from_platform(
+            tfvars["cluster_name"],
+            selected_env,
+        )
+        integration_logs.extend(platform_argocd_result["logs"])
+    except Exception as exc:
+        integration_warnings.append(
+            "Automatic Argo CD cluster deregistration did not complete. "
+            f"Reason: {exc}"
+        )
+
+    emit("Running terraform destroy.")
+    destroy_result = run_command(
+        [terraform_bin, "destroy", "-auto-approve"],
+        runtime_dir,
+        command_env,
+        log_callback=log_callback,
+    )
+    if destroy_result.returncode != 0:
+        raise RuntimeError(f"terraform destroy failed:\n{destroy_result.stderr.strip() or destroy_result.stdout.strip()}")
+    emit("terraform destroy completed.")
+
+    remove_runtime_artifacts(runtime_dir, tfvars["login_key_name"])
+    reset_ncloud_target_runtime_state(state, selected_env)
+    state.setdefault("provisioning", {}).setdefault("last_results", {})[selected_env] = {
+        "status": "destroyed",
+        "operation": "destroy",
+        "provisioned": False,
+        "destroyed_at": datetime.now(timezone.utc).isoformat(),
+        "runtime_dir": str(runtime_dir),
+        "cluster_uuid": "",
+        "cluster_endpoint": "",
+        "integration_logs": integration_logs,
+        "integration_warnings": integration_warnings,
+        "logs_tail": logs[-80:],
+    }
+    for message in integration_logs:
+        emit(message)
+    for warning in integration_warnings:
+        emit(f"WARNING: {warning}")
+
+    return state, {
+        "applied": True,
+        "destroyed": True,
+        "runtime_dir": str(runtime_dir),
+        "logs": logs,
+        "warnings": integration_warnings,
+        "outputs": {
+            "cluster_uuid": "",
+            "cluster_endpoint": "",
+        },
     }

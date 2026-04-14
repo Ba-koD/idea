@@ -425,7 +425,8 @@ textarea {
 }
 
 .secondary-btn,
-.main-deploy-btn {
+.main-deploy-btn,
+.danger-btn {
   flex: 1;
   padding: 12px;
   border-radius: 8px;
@@ -441,14 +442,20 @@ textarea {
   background: #334155;
 }
 
+.danger-btn {
+  background: #991b1b;
+}
+
 .secondary-btn:disabled,
-.main-deploy-btn:disabled {
+.main-deploy-btn:disabled,
+.danger-btn:disabled {
   opacity: 0.7;
   cursor: wait;
 }
 
 .secondary-btn:active,
-.main-deploy-btn:active {
+.main-deploy-btn:active,
+.danger-btn:active {
   transform: scale(0.98);
 }
 

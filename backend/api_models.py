@@ -505,3 +505,4 @@ class ProvisionRequest(BaseModel):
     selected_env: Literal["dev", "stage", "prod"]
     project_state: ProjectState
     apply: bool = True
+    operation: Literal["apply", "destroy"] = "apply"

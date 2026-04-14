@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 import generator
 from api_models import DeployRequest, EnvExchangeRequest, ProjectState, ProvisionRequest, normalize_project_state
 from env_import import apply_env_import, export_env_text, write_export_env_file
-from provisioning import ProvisioningPartialFailure, provision_ncloud_target
+from provisioning import ProvisioningPartialFailure, destroy_ncloud_target, provision_ncloud_target
 from state_store import load_or_initialize_state, save_state as save_encrypted_state
 
 app = FastAPI(title="idea Control Plane API")
@@ -59,12 +59,13 @@ def save_project_state(payload: ProjectState | dict) -> dict:
     return save_encrypted_state(OUTPUT_ROOT, payload, normalize_project_state)
 
 
-def create_provision_task(selected_env: str) -> dict:
+def create_provision_task(selected_env: str, operation: str) -> dict:
     task = {
         "task_id": uuid4().hex,
         "selected_env": selected_env,
+        "operation": operation,
         "status": "queued",
-        "logs": [f"Queued {selected_env.upper()} provisioning task."],
+        "logs": [f"Queued {selected_env.upper()} {operation} task."],
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "result": None,
@@ -255,16 +256,27 @@ async def provision_target(req: ProvisionRequest):
     try:
         selected_env = req.selected_env
         state = save_project_state(req.project_state)
-        next_state, result = provision_ncloud_target(state, selected_env, OUTPUT_ROOT, apply=req.apply)
+        operation = req.operation
+        handler = provision_ncloud_target if operation == "apply" else destroy_ncloud_target
+        next_state, result = handler(state, selected_env, OUTPUT_ROOT, apply=req.apply)
         saved_state = save_project_state(next_state)
 
         payload = {
             "status": "success",
             "selected_env": selected_env,
+            "operation": operation,
             "message": (
-                f"{selected_env.upper()} Ncloud target provisioned."
-                if result["applied"]
-                else f"{selected_env.upper()} Ncloud provisioning dry-run generated."
+                (
+                    f"{selected_env.upper()} Ncloud target provisioned."
+                    if result["applied"]
+                    else f"{selected_env.upper()} Ncloud provisioning dry-run generated."
+                )
+                if operation == "apply"
+                else (
+                    f"{selected_env.upper()} Ncloud target destroyed."
+                    if result["applied"]
+                    else f"{selected_env.upper()} Ncloud destroy dry-run generated."
+                )
             ),
             "project_state": saved_state,
             "logs": result["logs"],
@@ -272,7 +284,7 @@ async def provision_target(req: ProvisionRequest):
             "applied": result["applied"],
         }
 
-        if result["applied"]:
+        if operation == "apply" and result["applied"]:
             bundle = build_gitops_bundle(saved_state, selected_env)
             result["logs"].extend(bundle["logs"])
             payload.update(
@@ -304,7 +316,7 @@ async def provision_target(req: ProvisionRequest):
 
 @app.post("/api/provision-target/start")
 async def start_provision_target(req: ProvisionRequest):
-    task = create_provision_task(req.selected_env)
+    task = create_provision_task(req.selected_env, req.operation)
     payload = req.model_dump()
 
     def run_task() -> None:
@@ -312,8 +324,10 @@ async def start_provision_target(req: ProvisionRequest):
             update_provision_task(task["task_id"], status="running")
             append_provision_log(task["task_id"], "Saving project state to backend.")
             state = save_project_state(payload["project_state"])
-            append_provision_log(task["task_id"], "Project state saved. Starting provisioning pipeline.")
-            next_state, result = provision_ncloud_target(
+            operation = payload["operation"]
+            append_provision_log(task["task_id"], f"Project state saved. Starting {operation} pipeline.")
+            handler = provision_ncloud_target if operation == "apply" else destroy_ncloud_target
+            next_state, result = handler(
                 state,
                 payload["selected_env"],
                 OUTPUT_ROOT,
@@ -325,10 +339,19 @@ async def start_provision_target(req: ProvisionRequest):
             result_payload = {
                 "status": "success",
                 "selected_env": payload["selected_env"],
+                "operation": operation,
                 "message": (
-                    f"{payload['selected_env'].upper()} Ncloud target provisioned."
-                    if result["applied"]
-                    else f"{payload['selected_env'].upper()} Ncloud provisioning dry-run generated."
+                    (
+                        f"{payload['selected_env'].upper()} Ncloud target provisioned."
+                        if result["applied"]
+                        else f"{payload['selected_env'].upper()} Ncloud provisioning dry-run generated."
+                    )
+                    if operation == "apply"
+                    else (
+                        f"{payload['selected_env'].upper()} Ncloud target destroyed."
+                        if result["applied"]
+                        else f"{payload['selected_env'].upper()} Ncloud destroy dry-run generated."
+                    )
                 ),
                 "project_state": saved_state,
                 "logs": result["logs"],
@@ -336,7 +359,7 @@ async def start_provision_target(req: ProvisionRequest):
                 "applied": result["applied"],
             }
 
-            if result["applied"]:
+            if operation == "apply" and result["applied"]:
                 bundle = build_gitops_bundle(saved_state, payload["selected_env"])
                 result["logs"].extend(bundle["logs"])
                 result_payload.update(
@@ -368,6 +391,7 @@ async def start_provision_target(req: ProvisionRequest):
                 error=str(exc),
                 result={
                     "project_state": saved_state,
+                    "operation": payload["operation"],
                     "runtime_dir": exc.runtime_dir,
                     "logs": exc.logs,
                     "warnings": exc.warnings,
@@ -388,7 +412,8 @@ async def start_provision_target(req: ProvisionRequest):
         "status": "accepted",
         "task_id": task["task_id"],
         "selected_env": req.selected_env,
-        "message": f"{req.selected_env.upper()} provisioning started.",
+        "operation": req.operation,
+        "message": f"{req.selected_env.upper()} {req.operation} started.",
         "logs": task["logs"],
     }
 

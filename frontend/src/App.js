@@ -427,15 +427,51 @@ function readStoredState() {
   }
 }
 
+function defaultEnvLogs() {
+  return {
+    dev: [],
+    stage: [],
+    prod: []
+  };
+}
+
+function buildEnvLogsFromState(state, activeEnv, activeMessage = '') {
+  const nextLogs = defaultEnvLogs();
+  ENVIRONMENTS.forEach((envName) => {
+    const savedLogs = state?.provisioning?.last_results?.[envName]?.logs_tail;
+    nextLogs[envName] = Array.isArray(savedLogs) ? [...savedLogs] : [];
+  });
+  if (activeMessage) {
+    nextLogs[activeEnv] = appendLogMessage(nextLogs[activeEnv], activeMessage);
+  }
+  return nextLogs;
+}
+
+function getEnvProvisionState(state, envName) {
+  const result = state?.provisioning?.last_results?.[envName] || {};
+  const clusterUuid = String(state?.targets?.[envName]?.ncloud?.cluster_uuid || '').trim();
+
+  if (result.status === 'destroyed') {
+    return 'Destroyed';
+  }
+  if (clusterUuid) {
+    return 'Provisioned';
+  }
+  if (result.status === 'failed') {
+    return 'Failed';
+  }
+  return 'Not provisioned';
+}
+
 function App() {
   const [activeEnv, setActiveEnv] = useState('dev');
   const [prodActiveColor, setProdActiveColor] = useState('blue');
   const [projectState, setProjectState] = useState(defaultProjectState);
-  const [logs, setLogs] = useState([]);
+  const [envLogs, setEnvLogs] = useState(defaultEnvLogs);
   const [stateSource, setStateSource] = useState('loading');
   const [isReady, setIsReady] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [isProvisioningTarget, setIsProvisioningTarget] = useState(false);
+  const [activeTargetOperation, setActiveTargetOperation] = useState('');
   const [isImportingEnv, setIsImportingEnv] = useState(false);
   const [isExportingEnv, setIsExportingEnv] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
@@ -463,10 +499,13 @@ function App() {
   });
   const logEndRef = useRef(null);
   const envFileInputRef = useRef(null);
+  const isProvisioningTarget = activeTargetOperation === 'apply';
+  const isDestroyingTarget = activeTargetOperation === 'destroy';
+  const isTargetOperationPending = Boolean(activeTargetOperation);
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [logs]);
+  }, [activeEnv, envLogs]);
 
   useEffect(() => {
     if (statusMessage) {
@@ -507,7 +546,7 @@ function App() {
         }
 
         setProjectState(payload);
-        setLogs([`Loaded project state from backend for ${payload.project.name}.`]);
+        setEnvLogs(buildEnvLogsFromState(payload, activeEnv, `Loaded project state from backend for ${payload.project.name}.`));
         setStateSource('backend');
         window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
       } catch (error) {
@@ -518,12 +557,12 @@ function App() {
 
         if (stored) {
           setProjectState(stored);
-          setLogs(['Backend state unavailable. Loaded the last browser snapshot.']);
+          setEnvLogs(buildEnvLogsFromState(stored, activeEnv, 'Backend state unavailable. Loaded the last browser snapshot.'));
           setStateSource('browser');
         } else {
           const fallback = normalizeProjectState({});
           setProjectState(fallback);
-          setLogs(['No saved state found yet. Loaded repo_example defaults.']);
+          setEnvLogs(buildEnvLogsFromState(fallback, activeEnv, 'No saved state found yet. Loaded repo_example defaults.'));
           setStateSource('default');
         }
       } finally {
@@ -581,18 +620,24 @@ function App() {
 
     try {
       await persistProjectState();
-      setLogs((currentLogs) => appendLogMessage(currentLogs, 'Saved project state to backend.'));
+      setEnvLogs((currentLogs) => ({
+        ...currentLogs,
+        [activeEnv]: appendLogMessage(currentLogs[activeEnv] || [], 'Saved project state to backend.')
+      }));
       setStatusMessage('Project State saved.');
     } catch (error) {
-      setLogs((currentLogs) => appendLogMessage(currentLogs, `Save failed: ${error.message}`));
+      setEnvLogs((currentLogs) => ({
+        ...currentLogs,
+        [activeEnv]: appendLogMessage(currentLogs[activeEnv] || [], `Save failed: ${error.message}`)
+      }));
       setStatusMessage(`Save failed: ${error.message}`);
     } finally {
       setIsSaving(false);
     }
   }
 
-  async function handleProvisionTarget() {
-    setIsProvisioningTarget(true);
+  async function handleTargetOperation(operation) {
+    setActiveTargetOperation(operation);
     setStatusMessage('');
 
     try {
@@ -603,7 +648,8 @@ function App() {
         body: JSON.stringify({
           selected_env: activeEnv,
           project_state: saved,
-          apply: true
+          apply: true,
+          operation
         })
       });
 
@@ -612,8 +658,11 @@ function App() {
         throw new Error(payload.detail || `provision-target failed with ${response.status}`);
       }
 
-      setLogs(payload.logs || [`Started ${activeEnv.toUpperCase()} provisioning.`]);
-      setStatusMessage(payload.message || `${activeEnv.toUpperCase()} provisioning started.`);
+      setEnvLogs((currentLogs) => ({
+        ...currentLogs,
+        [activeEnv]: payload.logs || [`Started ${activeEnv.toUpperCase()} ${operation}.`]
+      }));
+      setStatusMessage(payload.message || `${activeEnv.toUpperCase()} ${operation} started.`);
 
       while (true) {
         await sleep(1000);
@@ -625,7 +674,10 @@ function App() {
           throw new Error(statusPayload.detail?.message || statusPayload.detail || `provision status failed with ${statusResponse.status}`);
         }
 
-        setLogs(statusPayload.logs || []);
+        setEnvLogs((currentLogs) => ({
+          ...currentLogs,
+          [activeEnv]: statusPayload.logs || []
+        }));
 
         if (statusPayload.status === 'completed') {
           const result = statusPayload.result || {};
@@ -635,12 +687,16 @@ function App() {
           window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
           setProvisionArtifactUrls((current) => ({
             ...current,
-            [activeEnv]: {
-              kubeconfig: result.kubeconfig_download_url || '',
-              argocd: result.argocd_cluster_secret_download_url || ''
-            }
+            [activeEnv]: operation === 'destroy'
+              ? { kubeconfig: '', argocd: '' }
+              : {
+                  kubeconfig: result.kubeconfig_download_url || '',
+                  argocd: result.argocd_cluster_secret_download_url || ''
+                }
           }));
-          setStatusMessage(result.message || `${activeEnv.toUpperCase()} target provisioned.`);
+          setStatusMessage(
+            result.message || `${activeEnv.toUpperCase()} target ${operation === 'destroy' ? 'destroyed' : 'provisioned'}.`
+          );
           break;
         }
 
@@ -656,10 +712,16 @@ function App() {
         }
       }
     } catch (error) {
-      setLogs((currentLogs) => appendLogMessage(currentLogs, `Provisioning failed: ${error.message}`));
-      setStatusMessage(`Provisioning failed: ${error.message}`);
+      setEnvLogs((currentLogs) => ({
+        ...currentLogs,
+        [activeEnv]: appendLogMessage(
+          currentLogs[activeEnv] || [],
+          `${operation === 'destroy' ? 'Destroy' : 'Provisioning'} failed: ${error.message}`
+        )
+      }));
+      setStatusMessage(`${operation === 'destroy' ? 'Destroy' : 'Provisioning'} failed: ${error.message}`);
     } finally {
-      setIsProvisioningTarget(false);
+      setActiveTargetOperation('');
     }
   }
 
@@ -672,7 +734,10 @@ function App() {
         body: JSON.stringify({ target_color: color })
       });
     } catch (error) {
-      setLogs((currentLogs) => appendLogMessage(currentLogs, `Traffic switch failed: ${error.message}`));
+      setEnvLogs((currentLogs) => ({
+        ...currentLogs,
+        [activeEnv]: appendLogMessage(currentLogs[activeEnv] || [], `Traffic switch failed: ${error.message}`)
+      }));
     }
   }
 
@@ -720,11 +785,14 @@ function App() {
         [importedEnv]: text || current[importedEnv]
       }));
       setActiveEnv(importedEnv);
-      setLogs((currentLogs) => [
+      setEnvLogs((currentLogs) => ({
         ...currentLogs,
-        `Imported ${summary?.file_name || file?.name || 'pasted.env'} into ${importedEnv.toUpperCase()}.`,
-        `Classified ${summary?.env_count || 0} runtime env keys, ${summary?.secret_count || 0} runtime secret keys, and ${summary?.control_plane_secret_count || 0} control-plane secret values.`
-      ]);
+        [importedEnv]: [
+          ...(currentLogs[importedEnv] || []),
+          `Imported ${summary?.file_name || file?.name || 'pasted.env'} into ${importedEnv.toUpperCase()}.`,
+          `Classified ${summary?.env_count || 0} runtime env keys, ${summary?.secret_count || 0} runtime secret keys, and ${summary?.control_plane_secret_count || 0} control-plane secret values.`
+        ]
+      }));
       setStatusMessage(payload.message || `${importedEnv.toUpperCase()} .env imported.`);
     } catch (error) {
       setLogs((currentLogs) => appendLogMessage(currentLogs, `Env import failed: ${error.message}`));
@@ -781,10 +849,13 @@ function App() {
         ...current,
         [activeEnv]: payload.download_url || ''
       }));
-      setLogs((currentLogs) => [
+      setEnvLogs((currentLogs) => ({
         ...currentLogs,
-        `Exported ${payload.file_name || `${activeEnv}.env`} from current IDEA project state.`
-      ]);
+        [activeEnv]: [
+          ...(currentLogs[activeEnv] || []),
+          `Exported ${payload.file_name || `${activeEnv}.env`} from current IDEA project state.`
+        ]
+      }));
       setStatusMessage(payload.message || `${activeEnv.toUpperCase()} .env export generated.`);
     } catch (error) {
       setLogs((currentLogs) => appendLogMessage(currentLogs, `Env export failed: ${error.message}`));
@@ -805,6 +876,13 @@ function App() {
   const currentEnvExchangeText = envExchangeText[activeEnv];
   const currentEnvDownloadUrl = envDownloadUrls[activeEnv];
   const currentProvisionArtifacts = provisionArtifactUrls[activeEnv];
+  const currentLogs = envLogs[activeEnv] || [];
+  const currentProvisionState = getEnvProvisionState(projectState, activeEnv);
+  const currentProvisionResult = projectState.provisioning?.last_results?.[activeEnv] || null;
+  const canDestroyCurrentTarget =
+    currentProvisionState === 'Provisioned' ||
+    Boolean(String(currentTarget.ncloud.cluster_uuid || '').trim()) ||
+    Boolean(String(currentTarget.ncloud.node_pool_id || '').trim());
   const prodExampleBlock = [
     'APP_ENV=prod',
     'APP_DISPLAY_NAME=Repo Example Prod',
@@ -879,7 +957,7 @@ function App() {
         <div className="header-right-status">
           <span className="live-status">
             <span className="status-dot green"></span>
-            {`State source: ${stateSource}`}
+            {`State source: ${stateSource} · ${activeEnv.toUpperCase()} ${currentProvisionState}`}
           </span>
         </div>
       </header>
@@ -1255,7 +1333,7 @@ function App() {
                   type="button"
                   className="secondary-btn env-import-btn"
                   onClick={openEnvImportPicker}
-                  disabled={isSaving || isProvisioningTarget || isImportingEnv || isExportingEnv}
+                  disabled={isSaving || isTargetOperationPending || isImportingEnv || isExportingEnv}
                 >
                   {isImportingEnv ? `IMPORTING ${activeEnv.toUpperCase()}...` : `IMPORT FILE`}
                 </button>
@@ -1263,7 +1341,7 @@ function App() {
                   type="button"
                   className="secondary-btn env-import-btn"
                   onClick={handleEnvTextImport}
-                  disabled={isSaving || isProvisioningTarget || isImportingEnv || isExportingEnv}
+                  disabled={isSaving || isTargetOperationPending || isImportingEnv || isExportingEnv}
                 >
                   IMPORT TEXT
                 </button>
@@ -1271,7 +1349,7 @@ function App() {
                   type="button"
                   className="secondary-btn env-import-btn"
                   onClick={handleEnvExport}
-                  disabled={isSaving || isProvisioningTarget || isImportingEnv || isExportingEnv}
+                  disabled={isSaving || isTargetOperationPending || isImportingEnv || isExportingEnv}
                 >
                   {isExportingEnv ? `EXPORTING ${activeEnv.toUpperCase()}...` : `EXPORT .ENV`}
                 </button>
@@ -1365,16 +1443,24 @@ function App() {
           </div>
 
           <div className="action-row">
-            <button className="secondary-btn" onClick={handleSave} disabled={isSaving || isProvisioningTarget || isImportingEnv || isExportingEnv}>
+            <button className="secondary-btn" onClick={handleSave} disabled={isSaving || isTargetOperationPending || isImportingEnv || isExportingEnv}>
               {isSaving ? 'SAVING...' : 'SAVE STATE'}
             </button>
 
             <button
               className="secondary-btn"
-              onClick={handleProvisionTarget}
-              disabled={isSaving || isProvisioningTarget || isImportingEnv || isExportingEnv}
+              onClick={() => handleTargetOperation('apply')}
+              disabled={isSaving || isTargetOperationPending || isImportingEnv || isExportingEnv}
             >
               {isProvisioningTarget ? `PROVISIONING ${activeEnv.toUpperCase()}...` : `PROVISION ${activeEnv.toUpperCase()} TARGET`}
+            </button>
+
+            <button
+              className="danger-btn"
+              onClick={() => handleTargetOperation('destroy')}
+              disabled={isSaving || isTargetOperationPending || isImportingEnv || isExportingEnv || !canDestroyCurrentTarget}
+            >
+              {isDestroyingTarget ? `DESTROYING ${activeEnv.toUpperCase()}...` : `DESTROY ${activeEnv.toUpperCase()} TARGET`}
             </button>
           </div>
 
@@ -1425,10 +1511,10 @@ function App() {
           </div>
 
           <div className="console-wrapper">
-            <div className="console-header">PROJECT_STATE_LOG_STREAM</div>
+            <div className="console-header">{`${activeEnv.toUpperCase()}_PROJECT_STATE_LOG_STREAM`}</div>
             <div className="console-content">
-              {logs.length === 0 && <span style={{ color: '#444' }}>Waiting for project state signal...</span>}
-              {logs.map((log, index) => (
+              {currentLogs.length === 0 && <span style={{ color: '#444' }}>Waiting for project state signal...</span>}
+              {currentLogs.map((log, index) => (
                 <div key={`${log}-${index}`}>
                   <span style={{ color: '#555' }}>&gt;&gt;&gt;</span> {log}
                 </div>
@@ -1461,8 +1547,21 @@ function App() {
               ● Source: <strong>{stateSource}</strong>
             </p>
             <p>
+              ● Provisioning: <strong>{currentProvisionState}</strong>
+            </p>
+            <p>
               ● Cluster: <strong>{currentTarget.ncloud.cluster_name}</strong>
             </p>
+            {currentProvisionResult?.applied_at && (
+              <p>
+                ● Last Applied: <strong>{new Date(currentProvisionResult.applied_at).toLocaleString()}</strong>
+              </p>
+            )}
+            {currentProvisionResult?.destroyed_at && (
+              <p>
+                ● Last Destroyed: <strong>{new Date(currentProvisionResult.destroyed_at).toLocaleString()}</strong>
+              </p>
+            )}
             {activeEnv === 'prod' && (
               <p>
                 ● Active Slot:{' '}
