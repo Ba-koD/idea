@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 import generator
 from api_models import DeployRequest, EnvExchangeRequest, ProjectState, ProvisionRequest, normalize_project_state
 from env_import import apply_env_import, export_env_text, write_export_env_file
-from provisioning import ProvisioningPartialFailure, destroy_ncloud_target, provision_ncloud_target
+from provisioning import ProvisioningPartialFailure, destroy_ncloud_target, provision_ncloud_target, strip_ansi_sequences
 from state_store import load_or_initialize_state, save_state as save_encrypted_state
 
 app = FastAPI(title="idea Control Plane API")
@@ -81,7 +81,7 @@ def append_provision_log(task_id: str, message: str) -> None:
         task = PROVISION_TASKS.get(task_id)
         if not task:
             return
-        task["logs"].append(message)
+        task["logs"].append(strip_ansi_sequences(message))
         task["updated_at"] = datetime.now(timezone.utc).isoformat()
 
 

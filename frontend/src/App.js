@@ -29,6 +29,10 @@ function sleep(ms) {
   });
 }
 
+function stripAnsiSequences(text) {
+  return String(text || '').replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
+}
+
 function deepMerge(base, override) {
   if (Array.isArray(base)) {
     return Array.isArray(override) ? [...override] : [...base];
@@ -137,10 +141,11 @@ function appendLogMessage(currentLogs, message) {
   if (!message) {
     return currentLogs;
   }
-  if (currentLogs[currentLogs.length - 1] === message) {
+  const normalizedMessage = stripAnsiSequences(message);
+  if (currentLogs[currentLogs.length - 1] === normalizedMessage) {
     return currentLogs;
   }
-  return [...currentLogs, message];
+  return [...currentLogs, normalizedMessage];
 }
 
 function pruneLegacyExampleSecrets(secretMap, envName) {
@@ -439,7 +444,7 @@ function buildEnvLogsFromState(state, activeEnv, activeMessage = '') {
   const nextLogs = defaultEnvLogs();
   ENVIRONMENTS.forEach((envName) => {
     const savedLogs = state?.provisioning?.last_results?.[envName]?.logs_tail;
-    nextLogs[envName] = Array.isArray(savedLogs) ? [...savedLogs] : [];
+    nextLogs[envName] = Array.isArray(savedLogs) ? savedLogs.map((log) => stripAnsiSequences(log)) : [];
   });
   if (activeMessage) {
     nextLogs[activeEnv] = appendLogMessage(nextLogs[activeEnv], activeMessage);
@@ -1522,7 +1527,7 @@ function App() {
               {currentLogs.length === 0 && <span style={{ color: '#444' }}>Waiting for project state signal...</span>}
               {currentLogs.map((log, index) => (
                 <div key={`${log}-${index}`}>
-                  <span style={{ color: '#555' }}>&gt;&gt;&gt;</span> {log}
+                  <span style={{ color: '#555' }}>&gt;&gt;&gt;</span> {stripAnsiSequences(log)}
                 </div>
               ))}
               <div ref={logEndRef} />
@@ -1586,9 +1591,9 @@ function App() {
             type="button"
             className="toast-text"
             onClick={() => setIsToastExpanded((current) => !current)}
-            title={statusMessage}
+            title={stripAnsiSequences(statusMessage)}
           >
-            {statusMessage}
+            {stripAnsiSequences(statusMessage)}
           </button>
           <button
             type="button"

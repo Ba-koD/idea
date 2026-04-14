@@ -27,6 +27,7 @@ DEFAULT_PLATFORM_CADDY_SERVICE_URL = os.getenv(
     "http://platform-caddy.edge-system.svc.cluster.local:80",
 )
 DEFAULT_CLOUDFLARE_API_BASE_URL = "https://api.cloudflare.com/client/v4"
+ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 
 TERRAFORM_VERSIONS_TF = dedent(
     """
@@ -377,6 +378,10 @@ class ProvisioningPartialFailure(RuntimeError):
         self.warnings = warnings or []
 
 
+def strip_ansi_sequences(text: str) -> str:
+    return ANSI_ESCAPE_RE.sub("", str(text or ""))
+
+
 def run_command(
     command: list[str],
     workdir: Path,
@@ -384,13 +389,19 @@ def run_command(
     log_callback: Callable[[str], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     if log_callback is None:
-        return subprocess.run(
+        result = subprocess.run(
             command,
             cwd=str(workdir),
             env=env,
             check=False,
             text=True,
             capture_output=True,
+        )
+        return subprocess.CompletedProcess(
+            command,
+            result.returncode,
+            stdout=strip_ansi_sequences(result.stdout),
+            stderr=strip_ansi_sequences(result.stderr),
         )
 
     process = subprocess.Popen(
@@ -406,8 +417,9 @@ def run_command(
 
     assert process.stdout is not None
     for line in process.stdout:
-        cleaned = line.rstrip()
-        output_lines.append(line)
+        sanitized_line = strip_ansi_sequences(line)
+        cleaned = sanitized_line.rstrip()
+        output_lines.append(sanitized_line)
         if cleaned:
             log_callback(cleaned)
 
