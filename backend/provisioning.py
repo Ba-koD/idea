@@ -10,6 +10,7 @@ import subprocess
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
+from time import monotonic
 from textwrap import dedent
 from typing import Any, Callable
 from urllib.error import HTTPError
@@ -707,6 +708,17 @@ def require_command(command_name: str, error_message: str) -> str:
     if resolved:
         return resolved
     raise RuntimeError(error_message)
+
+
+def format_elapsed_seconds(total_seconds: float) -> str:
+    seconds = max(0, int(round(total_seconds)))
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m {seconds:02d}s"
+    if minutes:
+        return f"{minutes}m {seconds:02d}s"
+    return f"{seconds}s"
 
 
 def bootstrap_ncloud_argocd_manager(
@@ -1859,18 +1871,21 @@ def provision_ncloud_target(
     emit(f"Ncloud target cluster_name={tfvars['cluster_name']} zone={tfvars['zone']} region={tfvars['region']}.")
     emit(f"Existing cluster_uuid={tfvars['existing_cluster_uuid'] or '(create new)'} vpc_no={tfvars['existing_vpc_no'] or '(create new)'}.")
     emit(f"Ncloud node server spec={tfvars['node_server_spec_code']} node_count={tfvars['node_count']}.")
-    emit("Running terraform init.")
-
+    emit("START terraform init.")
+    init_started_at = monotonic()
     init_result = run_command([terraform_bin, "init", "-backend=false"], runtime_dir, command_env, log_callback=log_callback)
     if init_result.returncode != 0:
+        emit(f"FAILED terraform init after {format_elapsed_seconds(monotonic() - init_started_at)}.")
         raise RuntimeError(f"terraform init failed:\n{init_result.stderr.strip() or init_result.stdout.strip()}")
-    emit("terraform init completed.")
+    emit(f"DONE terraform init in {format_elapsed_seconds(monotonic() - init_started_at)}.")
 
-    emit("Running terraform validate.")
+    emit("START terraform validate.")
+    validate_started_at = monotonic()
     validate_result = run_command([terraform_bin, "validate"], runtime_dir, command_env, log_callback=log_callback)
     if validate_result.returncode != 0:
+        emit(f"FAILED terraform validate after {format_elapsed_seconds(monotonic() - validate_started_at)}.")
         raise RuntimeError(f"terraform validate failed:\n{validate_result.stderr.strip() or validate_result.stdout.strip()}")
-    emit("terraform validate completed.")
+    emit(f"DONE terraform validate in {format_elapsed_seconds(monotonic() - validate_started_at)}.")
 
     if not apply:
         return state, {
@@ -1880,7 +1895,8 @@ def provision_ncloud_target(
             "tfvars": tfvars,
         }
 
-    emit("Running terraform apply.")
+    emit("START terraform apply.")
+    apply_started_at = monotonic()
     apply_result = run_command([terraform_bin, "apply", "-auto-approve"], runtime_dir, command_env, log_callback=log_callback)
     if apply_result.returncode != 0:
         apply_error_text = apply_result.stderr.strip() or apply_result.stdout.strip()
@@ -1892,14 +1908,16 @@ def provision_ncloud_target(
             clear_stale_cluster_reference(state, selected_env)
             tfvars = build_runtime_tfvars(state, selected_env)
             write_runtime_terraform_files(runtime_dir, tfvars)
-            emit("Re-running terraform apply after clearing the stale cluster reference.")
+            emit(f"RETRY terraform apply after stale cluster cleanup. Previous attempt took {format_elapsed_seconds(monotonic() - apply_started_at)}.")
+            apply_started_at = monotonic()
             apply_result = run_command([terraform_bin, "apply", "-auto-approve"], runtime_dir, command_env, log_callback=log_callback)
             if apply_result.returncode == 0:
-                emit("terraform apply completed after clearing the stale cluster reference.")
+                emit(f"DONE terraform apply in {format_elapsed_seconds(monotonic() - apply_started_at)} after clearing the stale cluster reference.")
             else:
                 apply_error_text = apply_result.stderr.strip() or apply_result.stdout.strip()
 
         if apply_result.returncode != 0:
+            emit(f"FAILED terraform apply after {format_elapsed_seconds(monotonic() - apply_started_at)}.")
             partial_outputs = extract_partial_runtime_outputs(runtime_dir)
             if partial_outputs.get("cluster_uuid"):
                 apply_partial_outputs_to_state(state, selected_env, partial_outputs)
@@ -1925,12 +1943,16 @@ def provision_ncloud_target(
                     warnings=["Partial Ncloud resources were created and saved to project state for retry."],
                 )
             raise RuntimeError(f"terraform apply failed:\n{apply_error_text}")
-    emit("terraform apply completed.")
+    else:
+        emit(f"DONE terraform apply in {format_elapsed_seconds(monotonic() - apply_started_at)}.")
 
-    emit("Collecting terraform outputs.")
+    emit("START terraform output collection.")
+    output_started_at = monotonic()
     output_result = run_command([terraform_bin, "output", "-json"], runtime_dir, command_env, log_callback=log_callback)
     if output_result.returncode != 0:
+        emit(f"FAILED terraform output collection after {format_elapsed_seconds(monotonic() - output_started_at)}.")
         raise RuntimeError(f"terraform output failed:\n{output_result.stderr.strip() or output_result.stdout.strip()}")
+    emit(f"DONE terraform output collection in {format_elapsed_seconds(monotonic() - output_started_at)}.")
 
     outputs = extract_terraform_output(output_result.stdout)
     kubeconfig = outputs["kubeconfig"]
@@ -1950,6 +1972,8 @@ def provision_ncloud_target(
     integration_warnings: list[str] = []
     argocd_cluster_config: dict[str, Any] | None = None
 
+    argo_registration_started_at = monotonic()
+    emit("START Argo CD target registration.")
     try:
         if outputs.get("cluster_uuid") and ".vnks.ntruss.com" in str(outputs.get("cluster_endpoint", "")):
             bootstrap_result = bootstrap_ncloud_argocd_manager(
@@ -1973,7 +1997,9 @@ def provision_ncloud_target(
             cluster_config=argocd_cluster_config,
         )
         integration_logs.extend(platform_argocd_result["logs"])
+        emit(f"DONE Argo CD target registration in {format_elapsed_seconds(monotonic() - argo_registration_started_at)}.")
     except Exception as exc:
+        emit(f"FAILED Argo CD target registration after {format_elapsed_seconds(monotonic() - argo_registration_started_at)}.")
         integration_warnings.append(
             "Automatic Argo CD cluster registration did not complete. "
             f"Reason: {exc}"
@@ -1982,10 +2008,14 @@ def provision_ncloud_target(
     argo_admin_password_ref = str(state.get("argo", {}).get("admin_password_secret_ref", "")).strip()
     argo_admin_password_value = resolve_secret_value(state, argo_admin_password_ref) if argo_admin_password_ref else ""
     if argo_admin_password_ref and not looks_like_placeholder(argo_admin_password_value):
+        argo_password_started_at = monotonic()
+        emit("START Argo CD admin password apply.")
         try:
             state, argo_password_result = apply_argocd_admin_password(state)
             integration_logs.extend(argo_password_result["logs"])
+            emit(f"DONE Argo CD admin password apply in {format_elapsed_seconds(monotonic() - argo_password_started_at)}.")
         except Exception as exc:
+            emit(f"FAILED Argo CD admin password apply after {format_elapsed_seconds(monotonic() - argo_password_started_at)}.")
             integration_warnings.append(
                 "Automatic Argo CD admin password apply did not complete. "
                 f"Reason: {exc}"
@@ -1996,21 +2026,29 @@ def provision_ncloud_target(
             "is missing or still a placeholder."
         )
 
+    argocd_cloudflare_started_at = monotonic()
+    emit("START Cloudflare Argo hostname reconcile.")
     try:
         cloudflare_result = reconcile_cloudflare_argocd_access(state)
         integration_logs.extend(cloudflare_result.get("logs", []))
         integration_warnings.extend(cloudflare_result.get("warnings", []))
+        emit(f"DONE Cloudflare Argo hostname reconcile in {format_elapsed_seconds(monotonic() - argocd_cloudflare_started_at)}.")
     except Exception as exc:
+        emit(f"FAILED Cloudflare Argo hostname reconcile after {format_elapsed_seconds(monotonic() - argocd_cloudflare_started_at)}.")
         integration_warnings.append(
             "Automatic Cloudflare Argo CD routing did not complete. "
             f"Reason: {exc}"
         )
 
+    env_cloudflare_started_at = monotonic()
+    emit(f"START Cloudflare {selected_env} hostname reconcile.")
     try:
         cloudflare_env_result = reconcile_cloudflare_environment_access(state, selected_env)
         integration_logs.extend(cloudflare_env_result.get("logs", []))
         integration_warnings.extend(cloudflare_env_result.get("warnings", []))
+        emit(f"DONE Cloudflare {selected_env} hostname reconcile in {format_elapsed_seconds(monotonic() - env_cloudflare_started_at)}.")
     except Exception as exc:
+        emit(f"FAILED Cloudflare {selected_env} hostname reconcile after {format_elapsed_seconds(monotonic() - env_cloudflare_started_at)}.")
         integration_warnings.append(
             f"Automatic Cloudflare {selected_env} routing did not complete. "
             f"Reason: {exc}"
@@ -2131,20 +2169,25 @@ def destroy_ncloud_target(
         f"Destroying Ncloud target cluster_name={tfvars['cluster_name']} "
         f"cluster_uuid={tfvars['existing_cluster_uuid'] or '(tracked state)'}."
     )
-    emit("Running terraform init.")
+    emit("START terraform init.")
+    init_started_at = monotonic()
     init_result = run_command([terraform_bin, "init", "-backend=false"], destroy_runtime_dir, command_env, log_callback=log_callback)
     if init_result.returncode != 0:
+        emit(f"FAILED terraform init after {format_elapsed_seconds(monotonic() - init_started_at)}.")
         raise RuntimeError(f"terraform init failed:\n{init_result.stderr.strip() or init_result.stdout.strip()}")
-    emit("terraform init completed.")
+    emit(f"DONE terraform init in {format_elapsed_seconds(monotonic() - init_started_at)}.")
 
-    emit("Running terraform validate.")
+    emit("START terraform validate.")
+    validate_started_at = monotonic()
     validate_result = run_command([terraform_bin, "validate"], destroy_runtime_dir, command_env, log_callback=log_callback)
     if validate_result.returncode != 0:
+        emit(f"FAILED terraform validate after {format_elapsed_seconds(monotonic() - validate_started_at)}.")
         raise RuntimeError(f"terraform validate failed:\n{validate_result.stderr.strip() or validate_result.stdout.strip()}")
-    emit("terraform validate completed.")
+    emit(f"DONE terraform validate in {format_elapsed_seconds(monotonic() - validate_started_at)}.")
 
     if using_import_destroy_state:
-        emit("Importing the current Ncloud resources into a temporary Terraform state for safe destroy.")
+        emit("START terraform import for safe destroy.")
+        import_started_at = monotonic()
         skipped_import_targets = import_existing_destroy_targets(
             destroy_runtime_dir,
             terraform_bin,
@@ -2159,10 +2202,11 @@ def destroy_ncloud_target(
                 + ", ".join(resource_address for resource_address, _ in skipped_import_targets)
                 + "."
             )
-        emit("terraform import completed for the existing target resources.")
+        emit(f"DONE terraform import for safe destroy in {format_elapsed_seconds(monotonic() - import_started_at)}.")
 
     if not apply:
-        emit("Running terraform plan -destroy.")
+        emit("START terraform plan -destroy.")
+        plan_started_at = monotonic()
         plan_result = run_command(
             [terraform_bin, "plan", "-destroy"],
             destroy_runtime_dir,
@@ -2170,8 +2214,9 @@ def destroy_ncloud_target(
             log_callback=log_callback,
         )
         if plan_result.returncode != 0:
+            emit(f"FAILED terraform plan -destroy after {format_elapsed_seconds(monotonic() - plan_started_at)}.")
             raise RuntimeError(f"terraform plan -destroy failed:\n{plan_result.stderr.strip() or plan_result.stdout.strip()}")
-        emit("terraform plan -destroy completed.")
+        emit(f"DONE terraform plan -destroy in {format_elapsed_seconds(monotonic() - plan_started_at)}.")
         if using_import_destroy_state:
             shutil.rmtree(destroy_runtime_dir, ignore_errors=True)
         return state, {
@@ -2184,7 +2229,8 @@ def destroy_ncloud_target(
 
     integration_logs: list[str] = []
     integration_warnings: list[str] = []
-    emit("Running terraform destroy.")
+    emit("START terraform destroy.")
+    destroy_started_at = monotonic()
     destroy_result = run_command(
         [terraform_bin, "destroy", "-auto-approve"],
         destroy_runtime_dir,
@@ -2192,16 +2238,21 @@ def destroy_ncloud_target(
         log_callback=log_callback,
     )
     if destroy_result.returncode != 0:
+        emit(f"FAILED terraform destroy after {format_elapsed_seconds(monotonic() - destroy_started_at)}.")
         raise RuntimeError(f"terraform destroy failed:\n{destroy_result.stderr.strip() or destroy_result.stdout.strip()}")
-    emit("terraform destroy completed.")
+    emit(f"DONE terraform destroy in {format_elapsed_seconds(monotonic() - destroy_started_at)}.")
 
+    argocd_cleanup_started_at = monotonic()
+    emit("START Argo CD target deregistration.")
     try:
         platform_argocd_result = delete_argocd_cluster_secret_from_platform(
             tfvars["cluster_name"],
             selected_env,
         )
         integration_logs.extend(platform_argocd_result["logs"])
+        emit(f"DONE Argo CD target deregistration in {format_elapsed_seconds(monotonic() - argocd_cleanup_started_at)}.")
     except Exception as exc:
+        emit(f"FAILED Argo CD target deregistration after {format_elapsed_seconds(monotonic() - argocd_cleanup_started_at)}.")
         integration_warnings.append(
             "Automatic Argo CD cluster deregistration did not complete. "
             f"Reason: {exc}"
