@@ -1,0 +1,44 @@
+graph TD
+    subgraph "레포 A (idea 소스코드)"
+        A1[GitHub Actions Workflow]
+    end
+
+    subgraph "Idea Platform 설치 도구"
+        T[Terraform<br/>On-Prem 호스트 기반 환경 준비]
+        AN[Ansible<br/>플랫폼 구성요소 설치]
+    end
+
+    subgraph "On-Prem 호스트"
+        subgraph "Idea Platform 구성요소"
+            DOCKER[Docker / Container Runtime]
+            KIND[kind]
+            ARGOCD[Argo CD]
+            IDEA_BE[idea Backend API]
+            IDEA_FE[idea Frontend UI]
+            DB_SEC[내부 DB / Secret Store]
+            MON[Monitoring Stack]
+            CADDY[Platform Caddy]
+            CFD[cloudflared]
+        end
+
+        TS["Template Service<br/>(운영자가 등록한 실제 서비스)<br/>── Project State 기반 프로비저닝 ──<br/>별도 흐름으로 배포됨"]
+    end
+
+    A1 -->|push 트리거| T
+    T -->|호스트 준비 완료| AN
+    AN -->|설치| DOCKER
+    AN -->|설치| KIND
+    AN -->|설치| ARGOCD
+    AN -->|설치| IDEA_BE
+    AN -->|설치| IDEA_FE
+    AN -->|설치| DB_SEC
+    AN -->|설치| MON
+    AN -->|설치| CADDY
+    AN -->|설치| CFD
+
+    IDEA_BE -.->|"플랫폼 설치 후<br/>운영자가 서비스 등록"| TS
+
+    style TS fill:#e8f4fd,stroke:#2196F3,stroke-width:2px,stroke-dasharray: 5 5
+    style A1 fill:#fff3e0,stroke:#FF9800
+    style T fill:#f3e5f5,stroke:#9C27B0
+    style AN fill:#f3e5f5,stroke:#9C27B0

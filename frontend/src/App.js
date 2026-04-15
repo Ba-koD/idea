@@ -612,7 +612,8 @@ function App() {
     stage: { kubeconfig: '', argocd: '' },
     prod: { kubeconfig: '', argocd: '' }
   });
-  const logEndRef = useRef(null);
+  const consoleContentRef = useRef(null);
+  const shouldAutoScrollRef = useRef(true);
   const envFileInputRef = useRef(null);
   const isProvisioningTarget = activeTargetOperation === 'apply';
   const isDestroyingTarget = activeTargetOperation === 'destroy';
@@ -620,7 +621,19 @@ function App() {
   const isTargetOperationPending = Boolean(activeTargetOperation);
 
   useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const consoleElement = consoleContentRef.current;
+    shouldAutoScrollRef.current = true;
+    if (consoleElement) {
+      consoleElement.scrollTop = consoleElement.scrollHeight;
+    }
+  }, [activeEnv]);
+
+  useEffect(() => {
+    const consoleElement = consoleContentRef.current;
+    if (!consoleElement || !shouldAutoScrollRef.current) {
+      return;
+    }
+    consoleElement.scrollTop = consoleElement.scrollHeight;
   }, [activeEnv, envLogs]);
 
   useEffect(() => {
@@ -1001,6 +1014,17 @@ function App() {
     } finally {
       setIsExportingEnv(false);
     }
+  }
+
+  function handleConsoleScroll() {
+    const consoleElement = consoleContentRef.current;
+    if (!consoleElement) {
+      return;
+    }
+
+    const distanceFromBottom =
+      consoleElement.scrollHeight - consoleElement.scrollTop - consoleElement.clientHeight;
+    shouldAutoScrollRef.current = distanceFromBottom <= 24;
   }
 
   const currentMeta = ENVIRONMENT_META[activeEnv];
@@ -1685,7 +1709,11 @@ function App() {
 
           <div className="console-wrapper">
             <div className="console-header">{`${activeEnv.toUpperCase()}_PROJECT_STATE_LOG_STREAM`}</div>
-            <div className="console-content">
+            <div
+              ref={consoleContentRef}
+              className="console-content"
+              onScroll={handleConsoleScroll}
+            >
               {currentLogs.length === 0 && <span style={{ color: '#444' }}>Waiting for project state signal...</span>}
               {currentLogs.map((log, index) => (
                 <div key={`${log}-${index}`}>
@@ -1697,7 +1725,6 @@ function App() {
                   ))}
                 </div>
               ))}
-              <div ref={logEndRef} />
             </div>
           </div>
 

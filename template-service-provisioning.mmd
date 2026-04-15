@@ -1,0 +1,84 @@
+graph TD
+    subgraph "운영자 입력"
+        UI[idea 웹 UI / CLI import]
+    end
+
+    subgraph "Project State 저장"
+        PS["Project State<br/>(versioned, 암호화 저장)"]
+    end
+
+    subgraph "레포 B (서비스 소스코드)"
+        REPO[App Repository<br/>소스코드 + Dockerfile]
+    end
+
+    subgraph "tmp 오케스트레이션 (idea 내부 로직)"
+        TMP_READ["Project State + 레포 B 구조 읽기"]
+        TMP_BUILD["이미지 Build / Push"]
+        TMP_GITOPS["GitOps Manifest 생성<br/>(Deployment, Service,<br/>ConfigMap, Secret, Job)"]
+        TMP_CF_STATE["Cloudflare Desired State 생성<br/>(Tunnel, hostname, IP List, WAF)"]
+        TMP_CADDY["Platform Caddy 라우팅 설정 생성"]
+    end
+
+    subgraph "Target Provisioning"
+        PROV["Ncloud NKS Target 생성<br/>(Terraform 기반)<br/>VPC / Subnet / Cluster / Node Pool"]
+        PROV_OUT["cluster_uuid, endpoint,<br/>kubeconfig, Argo CD cluster secret"]
+    end
+
+    subgraph "GitOps 반영"
+        GITOPS_REPO["GitOps Repository<br/>(desired state 기록)"]
+        ARGO["Argo CD<br/>Kubernetes sync"]
+    end
+
+    subgraph "Cloudflare 반영"
+        CF_API["Cloudflare API Reconciler"]
+    end
+
+    subgraph "Runtime 환경"
+        subgraph "dev"
+            DEV["dev 컨테이너<br/>dev_allowed_source_ips 제한"]
+        end
+        subgraph "stage"
+            STG["stage 컨테이너<br/>stage_allowed_source_ips 제한"]
+        end
+        subgraph "prod"
+            PROD_B["prod-blue"]
+            PROD_G["prod-green"]
+        end
+        CADDY_RT["Platform Caddy<br/>hostname 라우팅 + /api 프록시<br/>prod blue-green 전환"]
+        TUNNEL["cloudflared Tunnel<br/>외부 진입점"]
+    end
+
+    UI -->|"서비스 등록,<br/>env/secret,<br/>Cloudflare,<br/>target 입력"| PS
+    PS --> TMP_READ
+    REPO --> TMP_READ
+    TMP_READ --> TMP_BUILD
+    TMP_READ -->|"target 없으면"| PROV
+    PROV --> PROV_OUT
+    PROV_OUT -->|"cluster 등록"| ARGO
+    TMP_BUILD --> TMP_GITOPS
+    TMP_READ --> TMP_CF_STATE
+    TMP_READ --> TMP_CADDY
+    TMP_GITOPS --> GITOPS_REPO
+    TMP_CADDY --> GITOPS_REPO
+    GITOPS_REPO -->|"manifest 변경 감지"| ARGO
+    ARGO -->|sync| DEV
+    ARGO -->|sync| STG
+    ARGO -->|sync| PROD_B
+    ARGO -->|sync| PROD_G
+    TMP_CF_STATE --> CF_API
+    CF_API -->|"Tunnel + DNS + WAF"| TUNNEL
+    TUNNEL --> CADDY_RT
+    CADDY_RT --> DEV
+    CADDY_RT --> STG
+    CADDY_RT -->|"active slot"| PROD_B
+    CADDY_RT -->|"active slot"| PROD_G
+
+    style PS fill:#e8f5e9,stroke:#4CAF50,stroke-width:2px
+    style TMP_READ fill:#fff8e1,stroke:#FFC107
+    style TMP_BUILD fill:#fff8e1,stroke:#FFC107
+    style TMP_GITOPS fill:#fff8e1,stroke:#FFC107
+    style TMP_CF_STATE fill:#fff8e1,stroke:#FFC107
+    style TMP_CADDY fill:#fff8e1,stroke:#FFC107
+    style PROV fill:#fce4ec,stroke:#E91E63
+    style ARGO fill:#e3f2fd,stroke:#2196F3
+    style CF_API fill:#f3e5f5,stroke:#9C27B0
