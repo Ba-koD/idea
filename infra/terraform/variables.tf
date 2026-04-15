@@ -236,17 +236,3 @@ variable "vault_dev_root_token" {
   default     = "change-me-root"
   sensitive   = true
 }
-
-variable "app_repo_token" {
-  description = "Platform control-plane fallback token for the app repository."
-  type        = string
-  default     = ""
-  sensitive   = true
-}
-
-variable "gitops_repo_token" {
-  description = "Platform control-plane fallback token for the GitOps repository."
-  type        = string
-  default     = ""
-  sensitive   = true
-}

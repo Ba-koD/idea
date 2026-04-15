@@ -288,8 +288,6 @@ jobs:
           PLATFORM_BUILD_FRONTEND: ${{ steps.detect_changes.outputs.frontend_changed }}
           PLATFORM_BUILD_BACKEND: ${{ steps.detect_changes.outputs.backend_changed }}
           PLATFORM_POSTGRESQL_PASSWORD: ${{ secrets.PLATFORM_POSTGRESQL_PASSWORD }}
-          PLATFORM_APP_REPO_TOKEN: ${{ secrets.PLATFORM_APP_REPO_TOKEN }}
-          PLATFORM_GITOPS_REPO_TOKEN: ${{ secrets.PLATFORM_GITOPS_REPO_TOKEN }}
           PLATFORM_VAULT_DEV_ROOT_TOKEN: ${{ secrets.PLATFORM_VAULT_DEV_ROOT_TOKEN }}
           PLATFORM_CLOUDFLARED_TUNNEL_TOKEN: ${{ secrets.PLATFORM_CLOUDFLARED_TUNNEL_TOKEN }}
           PLATFORM_CLOUDFLARE_API_TOKEN: ${{ secrets.PLATFORM_CLOUDFLARE_API_TOKEN }}
@@ -382,8 +380,6 @@ jobs:
             "data_namespace": get_env("PLATFORM_DATA_NAMESPACE", "idea-data"),
             "vault_namespace": get_env("PLATFORM_VAULT_NAMESPACE", "vault"),
             "postgresql_password": require_env("PLATFORM_POSTGRESQL_PASSWORD"),
-            "app_repo_token": get_env("PLATFORM_APP_REPO_TOKEN", ""),
-            "gitops_repo_token": get_env("PLATFORM_GITOPS_REPO_TOKEN", "") or get_env("PLATFORM_APP_REPO_TOKEN", ""),
             "vault_dev_root_token": require_env("PLATFORM_VAULT_DEV_ROOT_TOKEN"),
           }
 

@@ -73,8 +73,6 @@ locals {
     vault_namespace                  = var.vault_namespace
     postgresql_password              = var.postgresql_password
     vault_dev_root_token             = var.vault_dev_root_token
-    app_repo_token                   = var.app_repo_token
-    gitops_repo_token                = var.gitops_repo_token
   }
 }
 

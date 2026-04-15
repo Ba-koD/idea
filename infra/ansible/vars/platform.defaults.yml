@@ -86,8 +86,6 @@ postgresql_storage_size: 8Gi
 vault_release_name: idea-vault
 vault_chart_version: 0.28.1
 vault_dev_root_token: change-me-root
-app_repo_token: ""
-gitops_repo_token: ""
 
 kube_prometheus_release_name: kube-prometheus-stack
 kube_prometheus_chart_version: 60.4.0
