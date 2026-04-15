@@ -2,8 +2,14 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+ARG KUBECTL_VERSION=v1.33.4
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl git unzip \
+    && curl -fsSL -o /usr/local/bin/kubectl https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl \
+    && chmod +x /usr/local/bin/kubectl \
+    && curl -fsSL -o /usr/local/bin/ncp-iam-authenticator https://github.com/NaverCloudPlatform/ncp-iam-authenticator/releases/latest/download/ncp-iam-authenticator_linux_amd64 \
+    && chmod +x /usr/local/bin/ncp-iam-authenticator \
     && curl -fsSL -o /tmp/terraform.zip https://releases.hashicorp.com/terraform/1.14.4/terraform_1.14.4_linux_amd64.zip \
     && unzip -q /tmp/terraform.zip -d /usr/local/bin \
     && rm -rf /var/lib/apt/lists/* /tmp/terraform.zip

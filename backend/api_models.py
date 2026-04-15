@@ -89,6 +89,33 @@ def looks_like_raw_ncloud_access_key(value: Any) -> bool:
     return any(text.startswith(prefix) for prefix in NCLOUD_ACCESS_KEY_PREFIXES)
 
 
+def looks_like_probable_ncloud_secret_value(value: Any) -> bool:
+    return looks_like_raw_ncloud_access_key(value)
+
+
+def looks_like_probable_ncloud_access_secret(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return looks_like_probable_ncloud_secret_value(text) and len(text) <= 30
+
+
+def looks_like_probable_ncloud_secret_secret(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return looks_like_probable_ncloud_secret_value(text) and len(text) > 30
+
+
+def migrate_secret_value_alias(secret_values: Dict[str, str], canonical_ref: str, predicate) -> None:
+    canonical = str(canonical_ref or "").strip().lower()
+    if not canonical or (canonical in secret_values and str(secret_values[canonical]).strip()):
+        return
+
+    for key, value in list(secret_values.items()):
+        if predicate(key) or predicate(value):
+            candidate = str(value or "").strip()
+            if candidate:
+                secret_values[canonical] = candidate
+                return
+
+
 def default_targets() -> Dict[str, Dict[str, Any]]:
     return {
         "dev": {
@@ -420,6 +447,47 @@ def normalize_project_state(raw_state: Any) -> Dict[str, Any]:
 
     delivery.setdefault("healthcheck_path", f"{routing.get('backend_base_path', '/api').rstrip('/')}/healthz")
     state.setdefault("provisioning", deepcopy(DEFAULT_PROJECT_STATE["provisioning"]))
+    provisioning = state["provisioning"]
+    secret_values = {
+        str(key or "").strip().lower(): str(value or "").strip()
+        for key, value in dict(provisioning.get("secret_values", {})).items()
+        if str(key or "").strip()
+    }
+    provisioning["secret_values"] = secret_values
+
+    migrate_secret_value_alias(
+        secret_values,
+        str(project.get("repo_access_secret_ref", "")).strip(),
+        looks_like_raw_github_token,
+    )
+    migrate_secret_value_alias(
+        secret_values,
+        str(argo.get("gitops_repo_access_secret_ref", "")).strip(),
+        looks_like_raw_github_token,
+    )
+    migrate_secret_value_alias(
+        secret_values,
+        str(cloudflare.get("api_token_secret_ref", "")).strip(),
+        looks_like_raw_cloudflare_token,
+    )
+    migrate_secret_value_alias(
+        secret_values,
+        str(argo.get("admin_password_secret_ref", "")).strip(),
+        lambda value: value == "argocd-admin-password",
+    )
+    for env_name in ENVIRONMENTS:
+        ncloud = state["targets"][env_name]["ncloud"]
+        migrate_secret_value_alias(
+            secret_values,
+            str(ncloud.get("access_key_secret_ref", "")).strip(),
+            looks_like_probable_ncloud_access_secret,
+        )
+        migrate_secret_value_alias(
+            secret_values,
+            str(ncloud.get("secret_key_secret_ref", "")).strip(),
+            looks_like_probable_ncloud_secret_secret,
+        )
+
     argo["access_hint"] = normalize_argocd_access_hint(argo.get("access_hint", ""), state)
 
     return state

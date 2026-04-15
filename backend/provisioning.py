@@ -30,6 +30,19 @@ DEFAULT_PLATFORM_CADDY_SERVICE_URL = os.getenv(
     "http://platform-caddy.edge-system.svc.cluster.local:80",
 )
 DEFAULT_CLOUDFLARE_API_BASE_URL = "https://api.cloudflare.com/client/v4"
+DEFAULT_KUBECTL_EXECUTABLE = os.getenv("IDEA_KUBECTL_EXECUTABLE", "kubectl")
+DEFAULT_NCLOUD_IAM_AUTHENTICATOR_EXECUTABLE = os.getenv(
+    "IDEA_NCLOUD_IAM_AUTHENTICATOR_EXECUTABLE",
+    "ncp-iam-authenticator",
+)
+DEFAULT_ARGOCD_MANAGER_SERVICE_ACCOUNT_NAME = os.getenv(
+    "IDEA_ARGOCD_MANAGER_SERVICE_ACCOUNT_NAME",
+    "argocd-manager",
+)
+DEFAULT_ARGOCD_MANAGER_SERVICE_ACCOUNT_NAMESPACE = os.getenv(
+    "IDEA_ARGOCD_MANAGER_SERVICE_ACCOUNT_NAMESPACE",
+    "kube-system",
+)
 
 TERRAFORM_VERSIONS_TF = dedent(
     """
@@ -410,6 +423,7 @@ def run_command(
     workdir: Path,
     env: dict[str, str],
     log_callback: Callable[[str], None] | None = None,
+    input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     if log_callback is None:
         return subprocess.run(
@@ -419,6 +433,7 @@ def run_command(
             check=False,
             text=True,
             capture_output=True,
+            input=input_text,
         )
 
     process = subprocess.Popen(
@@ -426,11 +441,16 @@ def run_command(
         cwd=str(workdir),
         env=env,
         text=True,
+        stdin=subprocess.PIPE if input_text is not None else None,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
     output_lines: list[str] = []
     log_callback(f"$ {' '.join(command)}")
+
+    if input_text is not None and process.stdin is not None:
+        process.stdin.write(input_text)
+        process.stdin.close()
 
     assert process.stdout is not None
     for line in process.stdout:
@@ -485,8 +505,32 @@ def render_kubeconfig(cluster_name: str, kubeconfig: dict[str, str]) -> str:
     ).strip() + "\n"
 
 
-def render_argocd_cluster_secret(cluster_name: str, cluster_endpoint: str, kubeconfig: dict[str, str], selected_env: str) -> str:
-    config = {
+def build_argocd_cluster_config(
+    cluster_endpoint: str,
+    kubeconfig: dict[str, str],
+    *,
+    bearer_token: str = "",
+) -> dict[str, Any]:
+    is_ncloud_nks_endpoint = ".vnks.ntruss.com" in str(cluster_endpoint)
+    if bearer_token:
+        tls_client_config: dict[str, Any] = {
+            "insecure": is_ncloud_nks_endpoint,
+        }
+        if not is_ncloud_nks_endpoint and kubeconfig.get("cluster_ca_certificate"):
+            tls_client_config["caData"] = kubeconfig["cluster_ca_certificate"]
+        return {
+            "bearerToken": bearer_token,
+            "tlsClientConfig": tls_client_config,
+        }
+
+    if is_ncloud_nks_endpoint:
+        return {
+            "tlsClientConfig": {
+                "insecure": True,
+            }
+        }
+
+    return {
         "tlsClientConfig": {
             "insecure": False,
             "caData": kubeconfig["cluster_ca_certificate"],
@@ -494,6 +538,17 @@ def render_argocd_cluster_secret(cluster_name: str, cluster_endpoint: str, kubec
             "keyData": kubeconfig["client_key"],
         }
     }
+
+
+def render_argocd_cluster_secret(
+    cluster_name: str,
+    cluster_endpoint: str,
+    kubeconfig: dict[str, str],
+    selected_env: str,
+    *,
+    cluster_config: dict[str, Any] | None = None,
+) -> str:
+    config = cluster_config or build_argocd_cluster_config(cluster_endpoint, kubeconfig)
     return dedent(
         f"""
         apiVersion: v1
@@ -622,7 +677,11 @@ def build_argocd_cluster_secret_manifest(
     cluster_endpoint: str,
     kubeconfig: dict[str, str],
     selected_env: str,
+    *,
+    cluster_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    config = cluster_config or build_argocd_cluster_config(cluster_endpoint, kubeconfig)
+
     return {
         "apiVersion": "v1",
         "kind": "Secret",
@@ -638,18 +697,157 @@ def build_argocd_cluster_secret_manifest(
         "stringData": {
             "name": cluster_name,
             "server": cluster_endpoint,
-            "config": json.dumps(
-                {
-                    "tlsClientConfig": {
-                        "insecure": False,
-                        "caData": kubeconfig["cluster_ca_certificate"],
-                        "certData": kubeconfig["client_certificate"],
-                        "keyData": kubeconfig["client_key"],
-                    }
-                },
-                indent=2,
-            ),
+            "config": json.dumps(config, indent=2),
         },
+    }
+
+
+def require_command(command_name: str, error_message: str) -> str:
+    resolved = shutil.which(command_name)
+    if resolved:
+        return resolved
+    raise RuntimeError(error_message)
+
+
+def bootstrap_ncloud_argocd_manager(
+    runtime_dir: Path,
+    cluster_name: str,
+    cluster_uuid: str,
+    region_code: str,
+    cluster_endpoint: str,
+    kubeconfig: dict[str, str],
+    selected_env: str,
+    command_env: dict[str, str],
+    log_callback: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    kubectl_bin = require_command(
+        DEFAULT_KUBECTL_EXECUTABLE,
+        "kubectl is required inside the backend image before Argo can register an Ncloud target cluster.",
+    )
+    authenticator_bin = require_command(
+        DEFAULT_NCLOUD_IAM_AUTHENTICATOR_EXECUTABLE,
+        "ncp-iam-authenticator is required inside the backend image before Argo can register an Ncloud target cluster.",
+    )
+
+    iam_kubeconfig_path = runtime_dir / "ncloud-iam-kubeconfig.yaml"
+    create_result = run_command(
+        [
+            authenticator_bin,
+            "create-kubeconfig",
+            "--region",
+            region_code,
+            "--clusterUuid",
+            cluster_uuid,
+            "--output",
+            str(iam_kubeconfig_path),
+        ],
+        runtime_dir,
+        command_env,
+        log_callback=log_callback,
+    )
+    if create_result.returncode != 0:
+        raise RuntimeError(
+            "ncp-iam-authenticator create-kubeconfig failed:\n"
+            f"{create_result.stderr.strip() or create_result.stdout.strip()}"
+        )
+
+    verify_result = run_command(
+        [kubectl_bin, "--kubeconfig", str(iam_kubeconfig_path), "get", "ns", "kube-system", "-o", "name"],
+        runtime_dir,
+        command_env,
+        log_callback=log_callback,
+    )
+    if verify_result.returncode != 0:
+        raise RuntimeError(
+            "kubectl could not reach the Ncloud cluster using IAM kubeconfig:\n"
+            f"{verify_result.stderr.strip() or verify_result.stdout.strip()}"
+        )
+
+    manager_namespace = DEFAULT_ARGOCD_MANAGER_SERVICE_ACCOUNT_NAMESPACE
+    manager_name = DEFAULT_ARGOCD_MANAGER_SERVICE_ACCOUNT_NAME
+    rbac_manifest = dedent(
+        f"""
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: {manager_name}
+          namespace: {manager_namespace}
+        ---
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: {manager_name}
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: cluster-admin
+        subjects:
+        - kind: ServiceAccount
+          name: {manager_name}
+          namespace: {manager_namespace}
+        """
+    ).strip() + "\n"
+    apply_rbac_result = run_command(
+        [kubectl_bin, "--kubeconfig", str(iam_kubeconfig_path), "apply", "-f", "-"],
+        runtime_dir,
+        command_env,
+        log_callback=log_callback,
+        input_text=rbac_manifest,
+    )
+    if apply_rbac_result.returncode != 0:
+        raise RuntimeError(
+            "kubectl apply failed while bootstrapping the Argo manager service account:\n"
+            f"{apply_rbac_result.stderr.strip() or apply_rbac_result.stdout.strip()}"
+        )
+
+    token_result = run_command(
+        [
+            kubectl_bin,
+            "--kubeconfig",
+            str(iam_kubeconfig_path),
+            "-n",
+            manager_namespace,
+            "create",
+            "token",
+            manager_name,
+            "--duration=8760h",
+        ],
+        runtime_dir,
+        command_env,
+        log_callback=log_callback,
+    )
+    if token_result.returncode != 0:
+        raise RuntimeError(
+            "kubectl create token failed while bootstrapping the Argo manager service account:\n"
+            f"{token_result.stderr.strip() or token_result.stdout.strip()}"
+        )
+
+    bearer_token = token_result.stdout.strip()
+    if not bearer_token:
+        raise RuntimeError("kubectl create token returned an empty service account token.")
+
+    cluster_config = build_argocd_cluster_config(
+        cluster_endpoint,
+        kubeconfig,
+        bearer_token=bearer_token,
+    )
+    (runtime_dir / "argocd-cluster-secret.yaml").write_text(
+        render_argocd_cluster_secret(
+            cluster_name,
+            cluster_endpoint,
+            kubeconfig,
+            selected_env,
+            cluster_config=cluster_config,
+        ),
+        encoding="utf-8",
+    )
+
+    return {
+        "cluster_config": cluster_config,
+        "logs": [
+            f"Bootstrapped Argo manager service account {manager_namespace}/{manager_name} on {cluster_name}.",
+            f"Prepared token-based Argo cluster secret for {cluster_name}.",
+        ],
     }
 
 
@@ -658,8 +856,16 @@ def apply_argocd_cluster_secret_to_platform(
     cluster_endpoint: str,
     kubeconfig: dict[str, str],
     selected_env: str,
+    *,
+    cluster_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    manifest = build_argocd_cluster_secret_manifest(cluster_name, cluster_endpoint, kubeconfig, selected_env)
+    manifest = build_argocd_cluster_secret_manifest(
+        cluster_name,
+        cluster_endpoint,
+        kubeconfig,
+        selected_env,
+        cluster_config=cluster_config,
+    )
     secret_name = manifest["metadata"]["name"]
     secret_path = f"/api/v1/namespaces/argocd/secrets/{quote(secret_name, safe='')}"
     existing = kube_api_request(secret_path, expected_statuses=(200, 404))
@@ -1200,6 +1406,13 @@ def recover_state_from_runtime_artifacts(
     runtime_dir = ensure_runtime_dir(output_root, state["project"]["name"], selected_env)
     saved_tfvars = read_runtime_tfvars(runtime_dir)
     desired_cluster_name = str(state["targets"][selected_env]["ncloud"].get("cluster_name") or "").strip()
+    ncloud = state["targets"][selected_env]["ncloud"]
+
+    if not any(
+        looks_like_resource_id(ncloud.get(key)) or looks_like_uuid(ncloud.get(key))
+        for key in ("cluster_uuid", "vpc_no", "subnet_no", "lb_subnet_no", "lb_public_subnet_no", "node_pool_id")
+    ):
+        return state, {}
 
     if saved_tfvars and desired_cluster_name and saved_tfvars.get("cluster_name") != desired_cluster_name:
         return state, {}
@@ -1208,7 +1421,6 @@ def recover_state_from_runtime_artifacts(
     if not recovered:
         return state, {}
 
-    ncloud = state["targets"][selected_env]["ncloud"]
     changed = False
 
     if recovered.get("cluster_uuid") and not looks_like_uuid(ncloud.get("cluster_uuid")):
@@ -1683,13 +1895,29 @@ def provision_ncloud_target(
 
     integration_logs: list[str] = []
     integration_warnings: list[str] = []
+    argocd_cluster_config: dict[str, Any] | None = None
 
     try:
+        if outputs.get("cluster_uuid") and ".vnks.ntruss.com" in str(outputs.get("cluster_endpoint", "")):
+            bootstrap_result = bootstrap_ncloud_argocd_manager(
+                runtime_dir,
+                tfvars["cluster_name"],
+                outputs["cluster_uuid"],
+                tfvars["region"],
+                outputs["cluster_endpoint"],
+                kubeconfig,
+                selected_env,
+                command_env,
+                log_callback=log_callback,
+            )
+            argocd_cluster_config = bootstrap_result["cluster_config"]
+            integration_logs.extend(bootstrap_result["logs"])
         platform_argocd_result = apply_argocd_cluster_secret_to_platform(
             tfvars["cluster_name"],
             outputs["cluster_endpoint"],
             kubeconfig,
             selected_env,
+            cluster_config=argocd_cluster_config,
         )
         integration_logs.extend(platform_argocd_result["logs"])
     except Exception as exc:
