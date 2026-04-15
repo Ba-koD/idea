@@ -46,6 +46,40 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Detect platform service changes
+        id: detect_changes
+        run: |
+          set -euo pipefail
+
+          frontend_changed=true
+          backend_changed=true
+
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            before_sha="${{ github.event.before }}"
+            after_sha="${{ github.sha }}"
+
+            if [ -n "$before_sha" ] && [ "$before_sha" != "0000000000000000000000000000000000000000" ]; then
+              git fetch --no-tags --depth=1 origin "$before_sha"
+              changed_files="$(git diff --name-only "$before_sha" "$after_sha" || true)"
+
+              frontend_changed=false
+              backend_changed=false
+
+              if printf '%s\n' "$changed_files" | grep -Eq '^frontend/'; then
+                frontend_changed=true
+              fi
+
+              if printf '%s\n' "$changed_files" | grep -Eq '^backend/'; then
+                backend_changed=true
+              fi
+            fi
+          fi
+
+          echo "frontend_changed=$frontend_changed" >> "$GITHUB_OUTPUT"
+          echo "backend_changed=$backend_changed" >> "$GITHUB_OUTPUT"
+          echo "PLATFORM_BUILD_FRONTEND=$frontend_changed" >> "$GITHUB_ENV"
+          echo "PLATFORM_BUILD_BACKEND=$backend_changed" >> "$GITHUB_ENV"
+
       - name: Bootstrap runner toolchain
         run: |
           set -euo pipefail
@@ -251,6 +285,8 @@ jobs:
           PLATFORM_CLOUDFLARE_PUBLIC_SUBDOMAIN: ${{ vars.PLATFORM_CLOUDFLARE_PUBLIC_SUBDOMAIN }}
           PLATFORM_CLOUDFLARE_TUNNEL_NAME: ${{ vars.PLATFORM_CLOUDFLARE_TUNNEL_NAME }}
           PLATFORM_CLOUDFLARE_ADMIN_ALLOWED_IPS: ${{ vars.PLATFORM_CLOUDFLARE_ADMIN_ALLOWED_IPS }}
+          PLATFORM_BUILD_FRONTEND: ${{ steps.detect_changes.outputs.frontend_changed }}
+          PLATFORM_BUILD_BACKEND: ${{ steps.detect_changes.outputs.backend_changed }}
           PLATFORM_POSTGRESQL_PASSWORD: ${{ secrets.PLATFORM_POSTGRESQL_PASSWORD }}
           PLATFORM_APP_REPO_TOKEN: ${{ secrets.PLATFORM_APP_REPO_TOKEN }}
           PLATFORM_GITOPS_REPO_TOKEN: ${{ secrets.PLATFORM_GITOPS_REPO_TOKEN }}
@@ -338,6 +374,8 @@ jobs:
             "enable_cloudflared": enable_cloudflared,
             "enable_cloudflare_reconciliation": enable_cloudflare_reconciliation,
             "platform_caddy_backend_base_path": get_env("PLATFORM_CADDY_BACKEND_BASE_PATH", "/api"),
+            "platform_build_frontend": parse_bool("PLATFORM_BUILD_FRONTEND", True),
+            "platform_build_backend": parse_bool("PLATFORM_BUILD_BACKEND", True),
             "idea_namespace": get_env("PLATFORM_IDEA_NAMESPACE", "idea-system"),
             "edge_namespace": get_env("PLATFORM_EDGE_NAMESPACE", "edge-system"),
             "monitoring_namespace": get_env("PLATFORM_MONITORING_NAMESPACE", "monitoring"),

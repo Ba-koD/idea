@@ -59,6 +59,8 @@ idea_frontend_env: {}
 platform_caddy_image: caddy:2.8.4
 platform_caddy_name: platform-caddy
 platform_caddy_backend_base_path: /api
+platform_build_frontend: true
+platform_build_backend: true
 
 cloudflared_image: cloudflare/cloudflared:2024.8.2
 cloudflared_tunnel_token: ""

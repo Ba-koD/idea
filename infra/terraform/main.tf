@@ -22,6 +22,8 @@ locals {
     cloudflare_argocd_subdomain      = var.cloudflare_argocd_subdomain
     cloudflare_tunnel_name           = var.cloudflare_tunnel_name
     platform_caddy_backend_path      = var.platform_caddy_backend_base_path
+    platform_build_frontend          = var.platform_build_frontend
+    platform_build_backend           = var.platform_build_backend
     namespaces = {
       idea       = var.idea_namespace
       edge       = var.edge_namespace
@@ -62,6 +64,8 @@ locals {
     cloudflare_tunnel_name           = var.cloudflare_tunnel_name
     cloudflare_admin_allowed_ips     = var.cloudflare_admin_allowed_ips
     platform_caddy_backend_base_path = var.platform_caddy_backend_base_path
+    platform_build_frontend          = var.platform_build_frontend
+    platform_build_backend           = var.platform_build_backend
     idea_namespace                   = var.idea_namespace
     edge_namespace                   = var.edge_namespace
     monitoring_namespace             = var.monitoring_namespace

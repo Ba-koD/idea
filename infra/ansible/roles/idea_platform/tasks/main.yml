@@ -74,12 +74,6 @@
     PATH: "{{ platform_cli_path }}"
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
 
-- name: Reset platform app build workspace
-  become: "{{ not platform_is_darwin }}"
-  ansible.builtin.file:
-    path: "{{ idea_build_workspace }}"
-    state: absent
-
 - name: Create platform app build workspace
   become: "{{ not platform_is_darwin }}"
   ansible.builtin.file:
@@ -102,12 +96,27 @@
       {}
     mode: "0600"
 
+- name: Reset frontend build workspace when frontend rebuild is enabled
+  become: "{{ not platform_is_darwin }}"
+  ansible.builtin.file:
+    path: "{{ idea_build_workspace }}/frontend"
+    state: absent
+  when: platform_build_frontend
+
+- name: Reset backend build workspace when backend rebuild is enabled
+  become: "{{ not platform_is_darwin }}"
+  ansible.builtin.file:
+    path: "{{ idea_build_workspace }}/backend"
+    state: absent
+  when: platform_build_backend
+
 - name: Sync frontend source to target build workspace
   become: "{{ not platform_is_darwin }}"
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../../frontend/"
     dest: "{{ idea_build_workspace }}/frontend/"
     mode: preserve
+  when: platform_build_frontend
 
 - name: Sync backend source to target build workspace
   become: "{{ not platform_is_darwin }}"
@@ -115,6 +124,7 @@
     src: "{{ playbook_dir }}/../../backend/"
     dest: "{{ idea_build_workspace }}/backend/"
     mode: preserve
+  when: platform_build_backend
 
 - name: Build platform frontend image from repo source
   become: "{{ not platform_is_darwin }}"
@@ -128,6 +138,7 @@
   environment:
     PATH: "{{ platform_cli_path }}"
     DOCKER_CONFIG: "{{ idea_docker_config_dir }}"
+  when: platform_build_frontend
 
 - name: Build platform backend image from repo source
   become: "{{ not platform_is_darwin }}"
@@ -141,6 +152,7 @@
   environment:
     PATH: "{{ platform_cli_path }}"
     DOCKER_CONFIG: "{{ idea_docker_config_dir }}"
+  when: platform_build_backend
 
 - name: Load platform frontend image into kind
   become: "{{ not platform_is_darwin }}"
@@ -154,6 +166,7 @@
       - "{{ kind_cluster_name }}"
   environment:
     PATH: "{{ platform_cli_path }}"
+  when: platform_build_frontend
 
 - name: Load platform backend image into kind
   become: "{{ not platform_is_darwin }}"
@@ -167,6 +180,7 @@
       - "{{ kind_cluster_name }}"
   environment:
     PATH: "{{ platform_cli_path }}"
+  when: platform_build_backend
 
 - name: Render idea platform manifest
   become: "{{ not platform_is_darwin }}"
@@ -200,6 +214,7 @@
   environment:
     PATH: "{{ platform_cli_path }}"
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
+  when: platform_build_backend
 
 - name: Restart frontend deployment to pick up rebuilt image
   become: "{{ not platform_is_darwin }}"
@@ -214,6 +229,7 @@
   environment:
     PATH: "{{ platform_cli_path }}"
     KUBECONFIG: "{{ platform_kubeconfig_path }}"
+  when: platform_build_frontend
 
 - name: Wait for frontend rollout
   become: "{{ not platform_is_darwin }}"

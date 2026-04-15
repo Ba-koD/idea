@@ -181,6 +181,18 @@ variable "platform_caddy_backend_base_path" {
   default     = "/api"
 }
 
+variable "platform_build_frontend" {
+  description = "Whether the platform workflow should rebuild and reload the frontend image during this run."
+  type        = bool
+  default     = true
+}
+
+variable "platform_build_backend" {
+  description = "Whether the platform workflow should rebuild and reload the backend image during this run."
+  type        = bool
+  default     = true
+}
+
 variable "idea_namespace" {
   description = "Namespace for the idea platform workloads."
   type        = string
