@@ -78,6 +78,37 @@ roleRef:
   kind: Role
   name: {{ idea_backend_name }}-argocd-secret-writer
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ idea_backend_name }}-edge-writer
+  namespace: edge-system
+  labels:
+    app.kubernetes.io/instance: idea-platform
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "patch", "update"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ idea_backend_name }}-edge-writer
+  namespace: edge-system
+  labels:
+    app.kubernetes.io/instance: idea-platform
+subjects:
+  - kind: ServiceAccount
+    name: {{ idea_backend_name }}-control-plane
+    namespace: {{ idea_namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ idea_backend_name }}-edge-writer
+---
 apiVersion: v1
 kind: Service
 metadata:

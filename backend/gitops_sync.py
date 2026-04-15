@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -8,11 +9,14 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import mkdtemp
+from time import monotonic, sleep
 from typing import Any, Callable
 from urllib.parse import quote, urlparse
 
 import generator
+from env_import import split_runtime_secrets
 from provisioning import (
+    DEFAULT_KUBECTL_EXECUTABLE,
     kube_api_request,
     normalize_secret_ref_name,
     reconcile_cloudflare_environment_access,
@@ -23,8 +27,11 @@ from provisioning import (
 GITOPS_MANIFEST_FILE_NAMES = (
     "namespace.yaml",
     "runtime-configmap.yaml",
-    "runtime-secret.yaml",
+    "app-stack.yaml",
 )
+PLATFORM_CADDY_NAMESPACE = os.getenv("IDEA_PLATFORM_CADDY_NAMESPACE", "edge-system").strip() or "edge-system"
+PLATFORM_CADDY_CONFIGMAP_NAME = os.getenv("IDEA_PLATFORM_CADDY_CONFIGMAP_NAME", "platform-caddy").strip() or "platform-caddy"
+PLATFORM_CADDY_DEPLOYMENT_NAME = os.getenv("IDEA_PLATFORM_CADDY_DEPLOYMENT_NAME", "platform-caddy").strip() or "platform-caddy"
 TOKEN_REDACTION_PATTERNS = (
     (re.compile(r"(https?://[^/\s:@]+:)[^@/\s]+(@)"), r"\1***\2"),
     (re.compile(r"github_pat_[A-Za-z0-9_]+"), "github_pat_***"),
@@ -207,6 +214,357 @@ def collect_gitops_source_manifests(output_dir: Path) -> list[Path]:
     return manifests
 
 
+def uses_platform_cluster(project_state: dict[str, Any]) -> bool:
+    destination_server = str(project_state.get("argo", {}).get("destination_server", "")).strip().rstrip("/")
+    return destination_server in {"", "https://kubernetes.default.svc", "http://kubernetes.default.svc"}
+
+
+def wait_for_platform_namespace(
+    namespace: str,
+    *,
+    log_callback: Callable[[str], None] | None = None,
+    timeout_seconds: int = 120,
+) -> None:
+    started_at = monotonic()
+    while monotonic() - started_at < timeout_seconds:
+        response = kube_api_request(f"/api/v1/namespaces/{quote(namespace, safe='')}", expected_statuses=(200, 404))
+        if response["status"] == 200:
+            return
+        sleep(2)
+    raise RuntimeError(f"Timed out waiting for namespace {namespace} to exist in the platform cluster.")
+
+
+def apply_runtime_secret_to_platform_cluster(
+    project_state: dict[str, Any],
+    selected_env: str,
+) -> list[str]:
+    runtime_inline_secrets, _ = split_runtime_secrets(project_state["secrets"][selected_env])
+    if not runtime_inline_secrets:
+        return ["Skipped direct runtime secret apply because no inline runtime secrets were configured."]
+
+    namespace = project_state["targets"][selected_env]["namespace"]
+    project_name = project_state["project"]["name"]
+    secret_name = f"{project_name}-{selected_env}-runtime-secrets"
+    wait_for_platform_namespace(namespace)
+    manifest = {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+            "name": secret_name,
+            "namespace": namespace,
+            "labels": {
+                "idea.rnen.kr/project": project_name,
+                "idea.rnen.kr/environment": selected_env,
+            },
+        },
+        "type": "Opaque",
+        "stringData": {
+            key: str(value).lstrip("\r\n")
+            for key, value in runtime_inline_secrets.items()
+        },
+    }
+    secret_path = f"/api/v1/namespaces/{quote(namespace, safe='')}/secrets/{quote(secret_name, safe='')}"
+    existing = kube_api_request(secret_path, expected_statuses=(200, 404))
+    if existing["status"] == 404:
+        kube_api_request(
+            f"/api/v1/namespaces/{quote(namespace, safe='')}/secrets",
+            method="POST",
+            body=manifest,
+            expected_statuses=(200, 201),
+        )
+        action = "created"
+    else:
+        kube_api_request(
+            secret_path,
+            method="PATCH",
+            body=manifest,
+            expected_statuses=(200,),
+            headers={"Content-Type": "application/merge-patch+json"},
+        )
+        action = "updated"
+    return [f"{action.capitalize()} runtime secret {secret_name} directly in platform namespace {namespace}."]
+
+
+def render_platform_caddy_env_route(project_state: dict[str, Any], selected_env: str) -> str:
+    hostname = str(project_state["routing"].get(f"{selected_env}_hostname", "")).strip()
+    if not hostname:
+        raise ValueError(f"No routing hostname is configured for {selected_env}.")
+
+    namespace = project_state["targets"][selected_env]["namespace"]
+    backend_service_name = str(project_state["routing"].get("backend_service_name", "backend")).strip() or "backend"
+    frontend_service_name = str(project_state["routing"].get("frontend_service_name", "frontend")).strip() or "frontend"
+    route_id = re.sub(r"[^a-z0-9]+", "", f"{project_state['project']['name']}-{selected_env}".lower()) or selected_env
+    start_marker = f"# BEGIN IDEA ENV {project_state['project']['name']} {selected_env}"
+    end_marker = f"# END IDEA ENV {project_state['project']['name']} {selected_env}"
+    return "\n".join(
+        [
+            f"  {start_marker}",
+            f"  @{route_id} host {hostname}",
+            f"  @{route_id}_api path /api*",
+            f"  handle @{route_id} {{",
+            f"    handle @{route_id}_api {{",
+            f"      reverse_proxy http://{backend_service_name}.{namespace}.svc.cluster.local:8080",
+            "    }",
+            "",
+            "    handle {",
+            f"      reverse_proxy http://{frontend_service_name}.{namespace}.svc.cluster.local:80",
+            "    }",
+            "  }",
+            f"  {end_marker}",
+        ]
+    )
+
+
+def upsert_marked_block(text: str, block: str, start_marker: str, end_marker: str) -> str:
+    pattern = re.compile(
+        rf"(?ms)^[ \t]*{re.escape(start_marker)}.*?^[ \t]*{re.escape(end_marker)}\n?"
+    )
+    if pattern.search(text):
+        return pattern.sub(f"{block}\n", text)
+
+    default_handle = '  handle {\n    respond "Not Found" 404\n  }\n}'
+    if default_handle in text:
+        return text.replace(default_handle, f"{block}\n\n{default_handle}", 1)
+    raise RuntimeError("platform-caddy ConfigMap did not contain the expected default Not Found handler.")
+
+
+def reconcile_platform_caddy_environment_route(
+    project_state: dict[str, Any],
+    selected_env: str,
+) -> list[str]:
+    route_block = render_platform_caddy_env_route(project_state, selected_env)
+    start_marker = f"# BEGIN IDEA ENV {project_state['project']['name']} {selected_env}"
+    end_marker = f"# END IDEA ENV {project_state['project']['name']} {selected_env}"
+    configmap_path = (
+        f"/api/v1/namespaces/{quote(PLATFORM_CADDY_NAMESPACE, safe='')}/configmaps/"
+        f"{quote(PLATFORM_CADDY_CONFIGMAP_NAME, safe='')}"
+    )
+    current = kube_api_request(configmap_path, expected_statuses=(200,))
+    configmap = current["body"]
+    current_caddyfile = str(configmap.get("data", {}).get("Caddyfile", "")).rstrip() + "\n"
+    next_caddyfile = upsert_marked_block(current_caddyfile, route_block, start_marker, end_marker)
+    if next_caddyfile == current_caddyfile:
+        updated = False
+    else:
+        kube_api_request(
+            configmap_path,
+            method="PATCH",
+            body={"data": {"Caddyfile": next_caddyfile}},
+            expected_statuses=(200,),
+            headers={"Content-Type": "application/merge-patch+json"},
+        )
+        restart_path = (
+            f"/apis/apps/v1/namespaces/{quote(PLATFORM_CADDY_NAMESPACE, safe='')}/deployments/"
+            f"{quote(PLATFORM_CADDY_DEPLOYMENT_NAME, safe='')}"
+        )
+        kube_api_request(
+            restart_path,
+            method="PATCH",
+            body={
+                "spec": {
+                    "template": {
+                        "metadata": {
+                            "annotations": {
+                                "idea.rnen.kr/restarted-at": datetime.now(timezone.utc).isoformat()
+                            }
+                        }
+                    }
+                }
+            },
+            expected_statuses=(200,),
+            headers={"Content-Type": "application/merge-patch+json"},
+        )
+        updated = True
+    hostname = str(project_state["routing"].get(f"{selected_env}_hostname", "")).strip()
+    return [
+        (
+            f"Updated platform-caddy route for {hostname} and restarted {PLATFORM_CADDY_DEPLOYMENT_NAME}."
+            if updated
+            else f"platform-caddy route for {hostname} was already up to date."
+        )
+    ]
+
+
+def read_repo_text(repo_dir: Path, relative_path: str) -> str:
+    candidate = repo_dir / relative_path
+    if not candidate.exists():
+        raise FileNotFoundError(f"Expected app repo file was missing: {relative_path}")
+    return candidate.read_text(encoding="utf-8").rstrip("\n")
+
+
+def repo_example_frontend_nginx_template(backend_service_name: str) -> str:
+    return "\n".join(
+        [
+            "server {",
+            "    listen 80;",
+            "    server_name _;",
+            "",
+            "    root /usr/share/nginx/html;",
+            "    index index.html;",
+            "",
+            "    location = /config.js {",
+            '        add_header Cache-Control "no-store";',
+            "        try_files $uri =404;",
+            "    }",
+            "",
+            "    location /api/ {",
+            f"        proxy_pass http://{backend_service_name}:8080;",
+            "        proxy_http_version 1.1;",
+            "        proxy_set_header Host $host;",
+            "        proxy_set_header X-Real-IP $remote_addr;",
+            "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+            "        proxy_set_header X-Forwarded-Proto $scheme;",
+            "    }",
+            "",
+            "    location = /api {",
+            f"        proxy_pass http://{backend_service_name}:8080;",
+            "        proxy_http_version 1.1;",
+            "        proxy_set_header Host $host;",
+            "        proxy_set_header X-Real-IP $remote_addr;",
+            "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+            "        proxy_set_header X-Forwarded-Proto $scheme;",
+            "    }",
+            "",
+            "    location / {",
+            "        try_files $uri /index.html;",
+            "    }",
+            "}",
+        ]
+    )
+
+
+def render_repo_example_stack(output_dir: Path, project_state: dict[str, Any], selected_env: str, repo_dir: Path) -> Path:
+    runtime_inline_secrets, _ = split_runtime_secrets(project_state["secrets"][selected_env])
+    runtime_secret_keys = sorted(runtime_inline_secrets.keys())
+    runtime_env = deepcopy(project_state["env"][selected_env])
+    frontend_env = {
+        key: value
+        for key, value in runtime_env.items()
+        if key in {"APP_ENV", "APP_DISPLAY_NAME", "PUBLIC_API_BASE_URL"}
+    }
+    frontend_env.setdefault("PUBLIC_API_BASE_URL", "/api")
+
+    postgres_db = str(runtime_env.get("POSTGRES_DB", "idea")).strip() or "idea"
+    postgres_user = str(runtime_env.get("POSTGRES_USER", "idea")).strip() or "idea"
+
+    context = {
+        "project": project_state["project"],
+        "selected_env": selected_env,
+        "target": project_state["targets"][selected_env],
+        "runtime_env": runtime_env,
+        "runtime_secret_keys": runtime_secret_keys,
+        "frontend_env": frontend_env,
+        "postgres_db": postgres_db,
+        "postgres_user": postgres_user,
+        "db_storage_size": "5Gi",
+        "frontend_index_html": read_repo_text(repo_dir, "frontend/public/index.html"),
+        "frontend_app_js": read_repo_text(repo_dir, "frontend/public/app.js"),
+        "frontend_config_js_template": read_repo_text(repo_dir, "frontend/public/config.js.template"),
+        "frontend_entrypoint_script": read_repo_text(repo_dir, "frontend/docker-entrypoint.d/30-render-config.sh"),
+        "frontend_nginx_template": repo_example_frontend_nginx_template(
+            str(project_state["routing"].get("backend_service_name", "backend")).strip() or "backend"
+        ),
+        "backend_package_json": read_repo_text(repo_dir, "backend/package.json"),
+        "backend_db_js": read_repo_text(repo_dir, "backend/db.js"),
+        "backend_server_js": read_repo_text(repo_dir, "backend/server.js"),
+    }
+
+    destination = output_dir / "app-stack.yaml"
+    destination.write_text(generator.render_template("repo-example-stack.yaml.j2", context), encoding="utf-8")
+    return destination
+
+
+def target_runtime_dir(output_root: Path, project_name: str, selected_env: str) -> Path:
+    return output_root / project_name / selected_env / "ncloud-runtime"
+
+
+def target_kubeconfig_path(output_root: Path, project_name: str, selected_env: str) -> Path | None:
+    runtime_dir = target_runtime_dir(output_root, project_name, selected_env)
+    for file_name in ("ncloud-iam-kubeconfig.yaml", "kubeconfig.yaml"):
+        candidate = runtime_dir / file_name
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def run_target_kubectl(
+    command: list[str],
+    kubeconfig_path: Path,
+    log_callback: Callable[[str], None] | None = None,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    env = {
+        **os.environ,
+        "KUBECONFIG": str(kubeconfig_path),
+    }
+    process = subprocess.run(
+        [DEFAULT_KUBECTL_EXECUTABLE, *command],
+        text=True,
+        input=input_text,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+    if log_callback is not None:
+        log_callback(f"$ {DEFAULT_KUBECTL_EXECUTABLE} {' '.join(command)}")
+        combined = (process.stdout or "") + (process.stderr or "")
+        for line in combined.splitlines():
+            if line.strip():
+                log_callback(line.rstrip())
+    return process
+
+
+def apply_runtime_secret_to_target_cluster(
+    project_state: dict[str, Any],
+    selected_env: str,
+    output_root: Path,
+    log_callback: Callable[[str], None] | None = None,
+) -> list[str]:
+    project_name = project_state["project"]["name"]
+    secret_manifest = output_root / project_name / selected_env / "runtime-secret.yaml"
+    if not secret_manifest.exists():
+        return ["Skipped direct runtime secret apply because no inline runtime secrets were configured."]
+
+    kubeconfig_path = target_kubeconfig_path(output_root, project_name, selected_env)
+    if kubeconfig_path is None:
+        return ["Skipped direct runtime secret apply because no target kubeconfig was available yet."]
+
+    apply_result = run_target_kubectl(["apply", "-f", "-"], kubeconfig_path, log_callback=log_callback, input_text=secret_manifest.read_text(encoding="utf-8"))
+    if apply_result.returncode != 0:
+        raise RuntimeError(f"kubectl apply failed for runtime-secret.yaml:\n{(apply_result.stderr or apply_result.stdout).strip()}")
+    return [f"Applied runtime secret directly to {selected_env} target cluster from {secret_manifest.name}."]
+
+
+def wait_for_frontend_service_url(
+    project_state: dict[str, Any],
+    selected_env: str,
+    output_root: Path,
+    log_callback: Callable[[str], None] | None = None,
+    timeout_seconds: int = 600,
+) -> str:
+    project_name = project_state["project"]["name"]
+    namespace = project_state["targets"][selected_env]["namespace"]
+    kubeconfig_path = target_kubeconfig_path(output_root, project_name, selected_env)
+    if kubeconfig_path is None:
+        raise RuntimeError("No target kubeconfig was available while waiting for the frontend load balancer.")
+
+    started_at = monotonic()
+    while monotonic() - started_at < timeout_seconds:
+        result = run_target_kubectl(["-n", namespace, "get", "service", "frontend", "-o", "json"], kubeconfig_path, log_callback=None)
+        if result.returncode == 0 and result.stdout.strip():
+            payload = json.loads(result.stdout)
+            ingress = payload.get("status", {}).get("loadBalancer", {}).get("ingress", []) or []
+            if ingress:
+                endpoint = ingress[0].get("hostname") or ingress[0].get("ip") or ""
+                if endpoint:
+                    if log_callback is not None:
+                        log_callback(f"Resolved frontend LoadBalancer endpoint for {selected_env}: {endpoint}")
+                    return f"http://{endpoint}:80"
+        sleep(5)
+
+    raise RuntimeError(f"Timed out waiting for the frontend LoadBalancer endpoint in namespace {namespace}.")
+
+
 def sync_gitops_repo(
     project_state: dict[str, Any],
     selected_env: str,
@@ -250,9 +608,6 @@ def sync_gitops_repo(
             log_callback(message)
 
     output_dir = generator.generate_all(state, selected_env)
-    manifest_files = collect_gitops_source_manifests(output_dir)
-    if not manifest_files:
-        raise ValueError("No Kubernetes manifests were generated for GitOps sync.")
 
     emit(f"Generated manifests in {output_dir}.")
     emit(f"Preparing GitOps sync for {project['name']} {selected_env.upper()} using {gitops_repo_url}#{gitops_repo_branch}.")
@@ -293,6 +648,11 @@ def sync_gitops_repo(
                 raise RuntimeError(f"git clone failed:\n{clone_result.stdout.strip()}")
 
         repo_dir = temp_dir / "repo"
+        render_repo_example_stack(output_dir, state, selected_env, repo_dir)
+        manifest_files = collect_gitops_source_manifests(output_dir)
+        if not manifest_files:
+            raise ValueError("No Kubernetes manifests were generated for GitOps sync.")
+
         target_dir = repo_dir / gitops_repo_path / selected_env
         target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -334,7 +694,7 @@ def sync_gitops_repo(
             if add_result.returncode != 0:
                 raise RuntimeError(f"git add failed:\n{add_result.stdout.strip()}")
 
-            commit_message = f"gitops({project['name']}/{selected_env}): sync runtime manifests"
+            commit_message = f"gitops({project['name']}/{selected_env}): sync app manifests"
             commit_result = run_git_command(["git", "commit", "-m", commit_message], repo_dir, clone_env, log_callback=log_callback)
             if commit_result.returncode != 0:
                 raise RuntimeError(f"git commit failed:\n{commit_result.stdout.strip()}")
@@ -372,6 +732,7 @@ def sync_gitops_repo(
 
         integration_logs: list[str] = []
         integration_warnings: list[str] = []
+        frontend_service_url = ""
 
         if apply_argocd:
             try:
@@ -380,8 +741,52 @@ def sync_gitops_repo(
             except Exception as exc:
                 integration_warnings.append(f"Argo CD application apply did not complete: {exc}")
 
+        if uses_platform_cluster(state):
+            try:
+                secret_apply_logs = apply_runtime_secret_to_platform_cluster(
+                    state,
+                    selected_env,
+                )
+                integration_logs.extend(secret_apply_logs)
+            except Exception as exc:
+                integration_warnings.append(f"Runtime secret apply did not complete: {exc}")
+
+            try:
+                caddy_logs = reconcile_platform_caddy_environment_route(
+                    state,
+                    selected_env,
+                )
+                integration_logs.extend(caddy_logs)
+            except Exception as exc:
+                integration_warnings.append(f"Platform edge routing did not complete: {exc}")
+        else:
+            try:
+                secret_apply_logs = apply_runtime_secret_to_target_cluster(
+                    state,
+                    selected_env,
+                    output_root,
+                    log_callback=log_callback,
+                )
+                integration_logs.extend(secret_apply_logs)
+            except Exception as exc:
+                integration_warnings.append(f"Runtime secret apply did not complete: {exc}")
+
+            try:
+                frontend_service_url = wait_for_frontend_service_url(
+                    state,
+                    selected_env,
+                    output_root,
+                    log_callback=log_callback,
+                )
+            except Exception as exc:
+                integration_warnings.append(f"Frontend LoadBalancer discovery did not complete: {exc}")
+
         try:
-            cloudflare_result = reconcile_cloudflare_environment_access(state, selected_env)
+            cloudflare_result = reconcile_cloudflare_environment_access(
+                state,
+                selected_env,
+                service_url=frontend_service_url or None,
+            )
             integration_logs.extend(cloudflare_result.get("logs", []))
             integration_warnings.extend(cloudflare_result.get("warnings", []))
         except Exception as exc:
@@ -411,6 +816,7 @@ def sync_gitops_repo(
             "gitops_repo_path": f"{gitops_repo_path}/{selected_env}",
             "gitops_commit_sha": commit_sha,
             "gitops_application_name": f"{project['name']}-{selected_env}",
+            "frontend_service_url": frontend_service_url,
             "warnings": integration_warnings,
         }
     finally:

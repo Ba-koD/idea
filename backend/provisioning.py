@@ -568,6 +568,28 @@ def render_argocd_cluster_secret(
     ).strip() + "\n" + "\n".join(f"            {line}" for line in json.dumps(config, indent=2).splitlines()) + "\n"
 
 
+def render_ncloud_credential_config(access_key: str, secret_key: str, region_code: str) -> str:
+    return dedent(
+        f"""
+        [DEFAULT]
+        ncloud_access_key_id = {access_key}
+        ncloud_secret_access_key = {secret_key}
+        ncloud_api_url = https://ncloud.apigw.ntruss.com
+        """
+    ).strip() + "\n"
+
+
+def write_ncloud_credential_config(runtime_dir: Path, access_key: str, secret_key: str, region_code: str) -> Path:
+    config_dir = runtime_dir / ".ncloud"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_path = config_dir / "configure"
+    config_path.write_text(
+        render_ncloud_credential_config(access_key, secret_key, region_code),
+        encoding="utf-8",
+    )
+    return config_path
+
+
 def preferred_base_domain(project_state: dict[str, Any]) -> str:
     environments = project_state.get("cloudflare", {}).get("environments", {})
     for env_name in ("prod", "stage", "dev"):
@@ -741,11 +763,23 @@ def bootstrap_ncloud_argocd_manager(
         "ncp-iam-authenticator is required inside the backend image before Argo can register an Ncloud target cluster.",
     )
 
+    access_key = str(command_env.get("NCLOUD_ACCESS_KEY", "")).strip()
+    secret_key = str(command_env.get("NCLOUD_SECRET_KEY", "")).strip()
+    if not access_key or not secret_key:
+        raise RuntimeError("NCLOUD_ACCESS_KEY and NCLOUD_SECRET_KEY must be present before Argo can register an Ncloud target cluster.")
+
+    credential_config_path = write_ncloud_credential_config(runtime_dir, access_key, secret_key, region_code)
     iam_kubeconfig_path = runtime_dir / "ncloud-iam-kubeconfig.yaml"
+    authenticator_env = {
+        **command_env,
+        "NCLOUD_API_GW": str(command_env.get("NCLOUD_API_GW", "")).strip() or "https://ncloud.apigw.ntruss.com",
+    }
     create_result = run_command(
         [
             authenticator_bin,
             "create-kubeconfig",
+            "--credentialConfig",
+            str(credential_config_path),
             "--region",
             region_code,
             "--clusterUuid",
@@ -754,7 +788,7 @@ def bootstrap_ncloud_argocd_manager(
             str(iam_kubeconfig_path),
         ],
         runtime_dir,
-        command_env,
+        authenticator_env,
         log_callback=log_callback,
     )
     if create_result.returncode != 0:
@@ -1268,7 +1302,11 @@ def reconcile_cloudflare_argocd_access(project_state: dict[str, Any]) -> dict[st
     )
 
 
-def reconcile_cloudflare_environment_access(project_state: dict[str, Any], selected_env: str) -> dict[str, Any]:
+def reconcile_cloudflare_environment_access(
+    project_state: dict[str, Any],
+    selected_env: str,
+    service_url: str | None = None,
+) -> dict[str, Any]:
     hostname = str(project_state.get("routing", {}).get(f"{selected_env}_hostname", "")).strip()
     allowed_ips = [
         item.strip()
@@ -1282,6 +1320,7 @@ def reconcile_cloudflare_environment_access(project_state: dict[str, Any], selec
         waf_rule_ref=f"idea-platform-{selected_env}-allowlist",
         waf_rule_description=f"Managed by idea platform for {selected_env} hostname IP restriction",
         missing_hostname_field=f"cloudflare.environments.{selected_env}",
+        service_url=service_url or DEFAULT_PLATFORM_CADDY_SERVICE_URL,
     )
 
 
@@ -1859,6 +1898,7 @@ def provision_ncloud_target(
         "NCLOUD_ACCESS_KEY": access_key,
         "NCLOUD_SECRET_KEY": secret_key,
         "NCLOUD_REGION": tfvars["region"],
+        "NCLOUD_API_GW": str(os.getenv("NCLOUD_API_GW", "")).strip() or "https://ncloud.apigw.ntruss.com",
         "TF_IN_AUTOMATION": "1",
     }
 
@@ -2154,6 +2194,7 @@ def destroy_ncloud_target(
         "NCLOUD_ACCESS_KEY": access_key,
         "NCLOUD_SECRET_KEY": secret_key,
         "NCLOUD_REGION": tfvars["region"],
+        "NCLOUD_API_GW": str(os.getenv("NCLOUD_API_GW", "")).strip() or "https://ncloud.apigw.ntruss.com",
         "TF_IN_AUTOMATION": "1",
     }
     terraform_bin = state.get("provisioning", {}).get("terraform_executable", "terraform")
