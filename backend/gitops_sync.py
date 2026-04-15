@@ -12,7 +12,13 @@ from typing import Any, Callable
 from urllib.parse import quote, urlparse
 
 import generator
-from provisioning import kube_api_request, normalize_secret_ref_name, resolve_secret_value, secret_env_var_name
+from provisioning import (
+    kube_api_request,
+    normalize_secret_ref_name,
+    reconcile_cloudflare_environment_access,
+    resolve_secret_value,
+    secret_env_var_name,
+)
 
 GITOPS_MANIFEST_FILE_NAMES = (
     "namespace.yaml",
@@ -373,6 +379,16 @@ def sync_gitops_repo(
                 integration_logs.extend(app_result["logs"])
             except Exception as exc:
                 integration_warnings.append(f"Argo CD application apply did not complete: {exc}")
+
+        try:
+            cloudflare_result = reconcile_cloudflare_environment_access(state, selected_env)
+            integration_logs.extend(cloudflare_result.get("logs", []))
+            integration_warnings.extend(cloudflare_result.get("warnings", []))
+        except Exception as exc:
+            integration_warnings.append(
+                "Cloudflare environment routing did not complete. "
+                f"Reason: {exc}"
+            )
 
         for message in integration_logs:
             emit(message)

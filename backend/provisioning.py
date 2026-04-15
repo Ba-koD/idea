@@ -1022,14 +1022,20 @@ def upsert_cloudflare_dns_record(api_token: str, zone_id: str, hostname: str, tu
     return logs
 
 
-def reconcile_cloudflare_waf_allowlist(api_token: str, zone_id: str, hostname: str, allowed_ips: list[str]) -> list[str]:
+def reconcile_cloudflare_waf_allowlist(
+    api_token: str,
+    zone_id: str,
+    hostname: str,
+    allowed_ips: list[str],
+    *,
+    ref: str = "idea-platform-argocd-admin-allowlist",
+    description: str = "Managed by idea platform for Argo CD admin IP restriction",
+) -> list[str]:
     if not allowed_ips:
-        return ["Skipped Cloudflare WAF reconciliation because no admin allowlist IPs were configured."]
+        return ["Skipped Cloudflare WAF reconciliation because no source IP allowlist was configured."]
 
     logs: list[str] = []
     expression = f'(http.host eq "{hostname}") and not ip.src in {{ {" ".join(allowed_ips)} }}'
-    ref = "idea-platform-argocd-admin-allowlist"
-    description = "Managed by idea platform for Argo CD admin IP restriction"
 
     entrypoint = cloudflare_api_request(
         api_token,
@@ -1106,16 +1112,33 @@ def reconcile_cloudflare_waf_allowlist(api_token: str, zone_id: str, hostname: s
     return logs
 
 
-def reconcile_cloudflare_argocd_access(project_state: dict[str, Any]) -> dict[str, Any]:
+def reconcile_cloudflare_hostname_access(
+    project_state: dict[str, Any],
+    hostname: str,
+    allowed_ips: list[str],
+    *,
+    waf_rule_ref: str,
+    waf_rule_description: str,
+    missing_hostname_field: str,
+    service_url: str = DEFAULT_PLATFORM_CADDY_SERVICE_URL,
+) -> dict[str, Any]:
     cloudflare = project_state.get("cloudflare", {})
     if not cloudflare.get("enabled", True):
         return {"applied": False, "warnings": ["Skipped Cloudflare reconciliation because Cloudflare is disabled."], "logs": []}
+
+    route_mode = str(cloudflare.get("route_mode", "platform_caddy") or "platform_caddy").strip()
+    if route_mode != "platform_caddy":
+        return {
+            "applied": False,
+            "warnings": [f"Skipped Cloudflare reconciliation because route_mode={route_mode!r} is not supported yet."],
+            "logs": [],
+        }
 
     api_token = resolve_secret_value(project_state, cloudflare.get("api_token_secret_ref", ""))
     account_id = str(cloudflare.get("account_id", "")).strip()
     zone_id = str(cloudflare.get("zone_id", "")).strip()
     tunnel_name = str(cloudflare.get("tunnel_name", "")).strip()
-    hostname = argocd_hostname(project_state)
+    normalized_hostname = str(hostname or "").strip().lower()
 
     missing = []
     if looks_like_placeholder(api_token):
@@ -1126,8 +1149,8 @@ def reconcile_cloudflare_argocd_access(project_state: dict[str, Any]) -> dict[st
         missing.append("IDEA_CLOUDFLARE_ZONE_ID")
     if not tunnel_name:
         missing.append("IDEA_CLOUDFLARE_TUNNEL_NAME")
-    if not hostname:
-        missing.append("IDEA_ARGO_ACCESS_HINT")
+    if not normalized_hostname:
+        missing.append(missing_hostname_field)
     if missing:
         return {
             "applied": False,
@@ -1171,12 +1194,12 @@ def reconcile_cloudflare_argocd_access(project_state: dict[str, Any]) -> dict[st
     updated_rules: list[dict[str, Any]] = []
     hostname_present = False
     for rule in hostname_rules:
-        if rule.get("hostname") == hostname:
+        if rule.get("hostname") == normalized_hostname:
             hostname_present = True
             updated_rules.append(
                 {
-                    "hostname": hostname,
-                    "service": DEFAULT_PLATFORM_CADDY_SERVICE_URL,
+                    "hostname": normalized_hostname,
+                    "service": service_url,
                     "originRequest": rule.get("originRequest", {}),
                 }
             )
@@ -1186,8 +1209,8 @@ def reconcile_cloudflare_argocd_access(project_state: dict[str, Any]) -> dict[st
     if not hostname_present:
         updated_rules.append(
             {
-                "hostname": hostname,
-                "service": DEFAULT_PLATFORM_CADDY_SERVICE_URL,
+                "hostname": normalized_hostname,
+                "service": service_url,
                 "originRequest": {},
             }
         )
@@ -1201,23 +1224,53 @@ def reconcile_cloudflare_argocd_access(project_state: dict[str, Any]) -> dict[st
         body={"config": updated_config},
     )
 
-    logs = [f"Cloudflare tunnel {tunnel_name} now routes {hostname} to {DEFAULT_PLATFORM_CADDY_SERVICE_URL}."]
-    logs.extend(upsert_cloudflare_dns_record(api_token, zone_id, hostname, tunnel_id))
+    logs = [f"Cloudflare tunnel {tunnel_name} now routes {normalized_hostname} to {service_url}."]
+    logs.extend(upsert_cloudflare_dns_record(api_token, zone_id, normalized_hostname, tunnel_id))
     logs.extend(
         reconcile_cloudflare_waf_allowlist(
             api_token,
             zone_id,
-            hostname,
-            [item.strip() for item in project_state.get("access", {}).get("admin_allowed_source_ips", []) if str(item).strip()],
+            normalized_hostname,
+            [item.strip() for item in allowed_ips if str(item).strip()],
+            ref=waf_rule_ref,
+            description=waf_rule_description,
         )
     )
     return {
         "applied": True,
         "warnings": [],
         "logs": logs,
-        "hostname": hostname,
+        "hostname": normalized_hostname,
         "tunnel_id": tunnel_id,
     }
+
+
+def reconcile_cloudflare_argocd_access(project_state: dict[str, Any]) -> dict[str, Any]:
+    return reconcile_cloudflare_hostname_access(
+        project_state,
+        argocd_hostname(project_state),
+        [item.strip() for item in project_state.get("access", {}).get("admin_allowed_source_ips", []) if str(item).strip()],
+        waf_rule_ref="idea-platform-argocd-admin-allowlist",
+        waf_rule_description="Managed by idea platform for Argo CD admin IP restriction",
+        missing_hostname_field="IDEA_ARGO_ACCESS_HINT",
+    )
+
+
+def reconcile_cloudflare_environment_access(project_state: dict[str, Any], selected_env: str) -> dict[str, Any]:
+    hostname = str(project_state.get("routing", {}).get(f"{selected_env}_hostname", "")).strip()
+    allowed_ips = [
+        item.strip()
+        for item in project_state.get("access", {}).get(f"{selected_env}_allowed_source_ips", [])
+        if str(item).strip()
+    ]
+    return reconcile_cloudflare_hostname_access(
+        project_state,
+        hostname,
+        allowed_ips,
+        waf_rule_ref=f"idea-platform-{selected_env}-allowlist",
+        waf_rule_description=f"Managed by idea platform for {selected_env} hostname IP restriction",
+        missing_hostname_field=f"cloudflare.environments.{selected_env}",
+    )
 
 
 def extract_terraform_output(raw_output: str) -> dict[str, Any]:
@@ -1950,6 +2003,16 @@ def provision_ncloud_target(
     except Exception as exc:
         integration_warnings.append(
             "Automatic Cloudflare Argo CD routing did not complete. "
+            f"Reason: {exc}"
+        )
+
+    try:
+        cloudflare_env_result = reconcile_cloudflare_environment_access(state, selected_env)
+        integration_logs.extend(cloudflare_env_result.get("logs", []))
+        integration_warnings.extend(cloudflare_env_result.get("warnings", []))
+    except Exception as exc:
+        integration_warnings.append(
+            f"Automatic Cloudflare {selected_env} routing did not complete. "
             f"Reason: {exc}"
         )
 
