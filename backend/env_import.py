@@ -305,6 +305,10 @@ def redact_project_state(project_state: Dict[str, Any]) -> Dict[str, Any]:
             next_secret_map[key] = "<redacted>"
         redacted["secrets"][env_name] = next_secret_map
 
+    provisioning = redacted.setdefault("provisioning", {})
+    provisioning["secret_values"] = {}
+    provisioning["last_results"] = {}
+
     return redacted
 
 

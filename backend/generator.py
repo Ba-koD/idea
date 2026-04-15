@@ -27,6 +27,7 @@ def generate_all(project_state: dict, selected_env: str) -> Path:
     output_dir = Path("outputs") / project["name"] / selected_env
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    redacted_project_state = redact_project_state(project_state)
     context = {
         "project": project,
         "argo": argo,
@@ -41,8 +42,8 @@ def generate_all(project_state: dict, selected_env: str) -> Path:
         "runtime_env_block": env_block(project_state["env"][selected_env]),
         "runtime_inline_secrets": runtime_inline_secrets,
         "runtime_secret_refs_block": env_block(runtime_secret_refs),
-        "project_state_json": json.dumps(project_state, indent=2, ensure_ascii=True),
-        "runtime_project_state_json": json.dumps(redact_project_state(project_state), indent=2, ensure_ascii=True),
+        "project_state_json": json.dumps(redacted_project_state, indent=2, ensure_ascii=True),
+        "runtime_project_state_json": json.dumps(redacted_project_state, indent=2, ensure_ascii=True),
     }
 
     rendered_files = {
