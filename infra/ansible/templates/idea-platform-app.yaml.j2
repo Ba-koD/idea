@@ -44,6 +44,18 @@ metadata:
   labels:
     app.kubernetes.io/instance: idea-platform
 ---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ idea_backend_name }}-control-plane-secrets
+  namespace: {{ idea_namespace }}
+  labels:
+    app.kubernetes.io/instance: idea-platform
+type: Opaque
+stringData:
+  app_repo_token: "{{ app_repo_token }}"
+  gitops_repo_token: "{{ gitops_repo_token }}"
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -139,6 +151,26 @@ spec:
               value: "{{ idea_backend_container_port }}"
             - name: APP_ENV
               value: "platform"
+            - name: IDEA_SECRET_GITHUB_REPO_EXAMPLE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ idea_backend_name }}-control-plane-secrets
+                  key: app_repo_token
+            - name: GITHUB_REPO_EXAMPLE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ idea_backend_name }}-control-plane-secrets
+                  key: app_repo_token
+            - name: IDEA_SECRET_GITOPS_REPO_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ idea_backend_name }}-control-plane-secrets
+                  key: gitops_repo_token
+            - name: GITOPS_REPO_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ idea_backend_name }}-control-plane-secrets
+                  key: gitops_repo_token
             - name: IDEA_STATE_DB_PATH
               value: "{{ idea_backend_state_db_path }}"
             - name: IDEA_STATE_ENCRYPTION_KEY_PATH

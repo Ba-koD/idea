@@ -285,10 +285,10 @@ function defaultProjectState() {
       project_name: 'default',
       destination_name: '',
       destination_server: 'https://kubernetes.default.svc',
-      gitops_repo_url: 'https://github.com/Ba-koD/idea.git',
+      gitops_repo_url: 'https://github.com/Ba-koD/repo_example',
       gitops_repo_branch: 'main',
       gitops_repo_path: 'gitops/apps',
-      gitops_repo_access_secret_ref: 'gitops-repo-token',
+      gitops_repo_access_secret_ref: 'github-repo-example-token',
       admin_password_secret_ref: 'argocd-admin-password',
       admin_password_last_applied_at: '',
       access_hint: 'https://argo.rnen.kr'

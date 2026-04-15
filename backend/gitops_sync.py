@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from copy import deepcopy
@@ -11,12 +12,19 @@ from typing import Any, Callable
 from urllib.parse import quote, urlparse
 
 import generator
-from provisioning import kube_api_request, resolve_secret_value
+from provisioning import kube_api_request, normalize_secret_ref_name, resolve_secret_value, secret_env_var_name
 
 GITOPS_MANIFEST_FILE_NAMES = (
     "namespace.yaml",
     "runtime-configmap.yaml",
     "runtime-secret.yaml",
+)
+TOKEN_REDACTION_PATTERNS = (
+    (re.compile(r"(https?://[^/\s:@]+:)[^@/\s]+(@)"), r"\1***\2"),
+    (re.compile(r"github_pat_[A-Za-z0-9_]+"), "github_pat_***"),
+    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]+\b"), "gh***"),
+    (re.compile(r"\bcfut_[A-Za-z0-9]+\b", re.IGNORECASE), "cfut_***"),
+    (re.compile(r"\bncp_iam_[A-Za-z0-9]+\b", re.IGNORECASE), "ncp_iam_***"),
 )
 
 
@@ -26,6 +34,12 @@ def run_git_command(
     env: dict[str, str],
     log_callback: Callable[[str], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    def sanitize(text: str) -> str:
+        sanitized = str(text or "")
+        for pattern, replacement in TOKEN_REDACTION_PATTERNS:
+            sanitized = pattern.sub(replacement, sanitized)
+        return sanitized
+
     process = subprocess.Popen(
         command,
         cwd=str(workdir),
@@ -36,17 +50,17 @@ def run_git_command(
     )
     output_lines: list[str] = []
     if log_callback is not None:
-        log_callback(f"$ {' '.join(command)}")
+        log_callback(sanitize(f"$ {' '.join(command)}"))
 
     assert process.stdout is not None
     for line in process.stdout:
         output_lines.append(line)
-        cleaned = line.rstrip()
+        cleaned = sanitize(line.rstrip())
         if cleaned and log_callback is not None:
             log_callback(cleaned)
 
     returncode = process.wait()
-    return subprocess.CompletedProcess(command, returncode, stdout="".join(output_lines), stderr="")
+    return subprocess.CompletedProcess(command, returncode, stdout=sanitize("".join(output_lines)), stderr="")
 
 
 def git_authenticated_url(repo_url: str, token: str) -> str:
@@ -58,6 +72,50 @@ def git_authenticated_url(repo_url: str, token: str) -> str:
     if not parsed.netloc:
         raise ValueError("GitOps repo URL must include a hostname.")
     return f"{parsed.scheme}://x-access-token:{quote(token, safe='')}@{parsed.netloc}{parsed.path}"
+
+
+def control_plane_env_secret_value(secret_ref: str) -> str:
+    normalized_ref = normalize_secret_ref_name(secret_ref)
+    env_names = [
+        secret_env_var_name(secret_ref),
+        normalized_ref.replace("-", "_").upper(),
+    ]
+    for env_name in env_names:
+        value = os.getenv(env_name, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def build_git_token_candidates(
+    project_state: dict[str, Any],
+    primary_secret_ref: str,
+) -> list[tuple[str, str]]:
+    candidates: list[tuple[str, str]] = []
+    seen_refs: set[str] = set()
+
+    def add(secret_ref: str) -> None:
+        normalized_ref = normalize_secret_ref_name(secret_ref)
+        if not normalized_ref or normalized_ref in seen_refs:
+            return
+        seen_refs.add(normalized_ref)
+        value = control_plane_env_secret_value(secret_ref)
+        if value:
+            candidates.append((normalized_ref, value))
+
+    add(primary_secret_ref)
+    add(project_state.get("project", {}).get("repo_access_secret_ref", ""))
+    add(project_state.get("argo", {}).get("gitops_repo_access_secret_ref", ""))
+    return candidates
+
+
+def is_git_auth_error(output: str) -> bool:
+    normalized = str(output or "")
+    return (
+        "requested url returned error: 403" in normalized.lower()
+        or "permission to " in normalized.lower()
+        or "authentication failed" in normalized.lower()
+    )
 
 
 def build_argocd_application_manifest(project_state: dict[str, Any], selected_env: str) -> dict[str, Any]:
@@ -160,6 +218,11 @@ def sync_gitops_repo(
     gitops_repo_path = str(argo.get("gitops_repo_path", "")).strip().strip("/")
     access_token_ref = str(argo.get("gitops_repo_access_secret_ref", "")).strip()
     access_token = resolve_secret_value(state, access_token_ref)
+    fallback_token_candidates = [
+        (ref, value)
+        for ref, value in build_git_token_candidates(state, access_token_ref)
+        if value and value != access_token
+    ]
 
     if not gitops_repo_url:
         raise ValueError("argo.gitops_repo_url must be configured before GitOps sync can run.")
@@ -203,7 +266,25 @@ def sync_gitops_repo(
             log_callback=log_callback,
         )
         if clone_result.returncode != 0:
-            raise RuntimeError(f"git clone failed:\n{clone_result.stdout.strip()}")
+            clone_error = clone_result.stdout.strip()
+            if fallback_token_candidates and is_git_auth_error(clone_error):
+                for fallback_secret_ref, fallback_token in fallback_token_candidates:
+                    emit(
+                        f"Primary GitOps token could not clone the repo. "
+                        f"Retrying with platform control-plane fallback secret {fallback_secret_ref}."
+                    )
+                    fallback_repo_url = git_authenticated_url(gitops_repo_url, fallback_token)
+                    clone_result = run_git_command(
+                        ["git", "clone", "--depth", "1", "--branch", gitops_repo_branch, fallback_repo_url, str(temp_dir / "repo")],
+                        temp_dir,
+                        clone_env,
+                        log_callback=log_callback,
+                    )
+                    if clone_result.returncode == 0:
+                        authenticated_repo_url = fallback_repo_url
+                        break
+            if clone_result.returncode != 0:
+                raise RuntimeError(f"git clone failed:\n{clone_result.stdout.strip()}")
 
         repo_dir = temp_dir / "repo"
         target_dir = repo_dir / gitops_repo_path / selected_env
@@ -254,7 +335,27 @@ def sync_gitops_repo(
 
             push_result = run_git_command(["git", "push", "origin", gitops_repo_branch], repo_dir, clone_env, log_callback=log_callback)
             if push_result.returncode != 0:
-                raise RuntimeError(f"git push failed:\n{push_result.stdout.strip()}")
+                push_error = push_result.stdout.strip()
+                if fallback_token_candidates and is_git_auth_error(push_error):
+                    for fallback_secret_ref, fallback_token in fallback_token_candidates:
+                        emit(
+                            f"Primary GitOps token could not push to the repo. "
+                            f"Retrying with platform control-plane fallback secret {fallback_secret_ref}."
+                        )
+                        fallback_repo_url = git_authenticated_url(gitops_repo_url, fallback_token)
+                        remote_result = run_git_command(
+                            ["git", "remote", "set-url", "origin", fallback_repo_url],
+                            repo_dir,
+                            clone_env,
+                            log_callback=log_callback,
+                        )
+                        if remote_result.returncode != 0:
+                            raise RuntimeError(f"git remote set-url failed:\n{remote_result.stdout.strip()}")
+                        push_result = run_git_command(["git", "push", "origin", gitops_repo_branch], repo_dir, clone_env, log_callback=log_callback)
+                        if push_result.returncode == 0:
+                            break
+                if push_result.returncode != 0:
+                    raise RuntimeError(f"git push failed:\n{push_result.stdout.strip()}")
 
             rev_result = run_git_command(["git", "rev-parse", "HEAD"], repo_dir, clone_env, log_callback=None)
             if rev_result.returncode == 0:

@@ -3,7 +3,7 @@ FROM python:3.12-slim
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl unzip \
+    && apt-get install -y --no-install-recommends ca-certificates curl git unzip \
     && curl -fsSL -o /tmp/terraform.zip https://releases.hashicorp.com/terraform/1.14.4/terraform_1.14.4_linux_amd64.zip \
     && unzip -q /tmp/terraform.zip -d /usr/local/bin \
     && rm -rf /var/lib/apt/lists/* /tmp/terraform.zip

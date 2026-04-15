@@ -10,12 +10,17 @@ ENVIRONMENTS: tuple[str, ...] = ("dev", "stage", "prod")
 SUPPORTED_NCLOUD_CLUSTER_VERSIONS: tuple[str, ...] = ("1.33.4", "1.34.3", "1.32.8")
 DEFAULT_NCLOUD_CLUSTER_VERSION = "1.33.4"
 DEFAULT_PLATFORM_TUNNEL_NAME = "idea-platform"
+LEGACY_IDEA_GITOPS_REPO_URL = "https://github.com/Ba-koD/idea.git"
 DEFAULT_ARGOCD_SUBDOMAIN = "argo"
 DEFAULT_NCLOUD_NODE_SERVER_SPEC_BY_ENV: Dict[str, str] = {
     "dev": "s2-g3a",
     "stage": "s2-g3a",
     "prod": "s4-g3a",
 }
+
+GITHUB_TOKEN_PREFIXES: tuple[str, ...] = ("github_pat_", "ghp_", "gho_", "ghu_", "ghs_", "ghr_")
+NCLOUD_ACCESS_KEY_PREFIXES: tuple[str, ...] = ("ncp_iam_",)
+CLOUDFLARE_TOKEN_PREFIXES: tuple[str, ...] = ("cfut_",)
 
 
 def build_hostname(subdomain: str, base_domain: str) -> str:
@@ -67,6 +72,21 @@ def normalize_ncloud_node_product_code(raw_value: Any, env_name: str) -> str:
     if text.upper().startswith("SVR."):
         return default_value
     return text
+
+
+def looks_like_raw_github_token(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return any(text.startswith(prefix) for prefix in GITHUB_TOKEN_PREFIXES)
+
+
+def looks_like_raw_cloudflare_token(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return any(text.startswith(prefix) for prefix in CLOUDFLARE_TOKEN_PREFIXES)
+
+
+def looks_like_raw_ncloud_access_key(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return any(text.startswith(prefix) for prefix in NCLOUD_ACCESS_KEY_PREFIXES)
 
 
 def default_targets() -> Dict[str, Dict[str, Any]]:
@@ -247,10 +267,10 @@ DEFAULT_PROJECT_STATE: Dict[str, Any] = {
         "project_name": "default",
         "destination_name": "",
         "destination_server": "https://kubernetes.default.svc",
-        "gitops_repo_url": "https://github.com/Ba-koD/idea.git",
+        "gitops_repo_url": "https://github.com/Ba-koD/repo_example",
         "gitops_repo_branch": "main",
         "gitops_repo_path": "gitops/apps",
-        "gitops_repo_access_secret_ref": "gitops-repo-token",
+        "gitops_repo_access_secret_ref": "github-repo-example-token",
         "admin_password_secret_ref": "argocd-admin-password",
         "admin_password_last_applied_at": "",
         "access_hint": "https://argo.rnen.kr",
@@ -334,6 +354,24 @@ def normalize_project_state(raw_state: Any) -> Dict[str, Any]:
     if not str(cloudflare.get("tunnel_name", "")).strip():
         cloudflare["tunnel_name"] = DEFAULT_PLATFORM_TUNNEL_NAME
 
+    project = state.setdefault("project", {})
+    if looks_like_raw_github_token(project.get("repo_access_secret_ref")):
+        project["repo_access_secret_ref"] = DEFAULT_PROJECT_STATE["project"]["repo_access_secret_ref"]
+
+    if not str(argo.get("gitops_repo_url", "")).strip() or str(argo.get("gitops_repo_url", "")).strip() == LEGACY_IDEA_GITOPS_REPO_URL:
+        argo["gitops_repo_url"] = str(project.get("app_repo_url", "")).strip() or DEFAULT_PROJECT_STATE["project"]["app_repo_url"]
+
+    if looks_like_raw_github_token(argo.get("gitops_repo_access_secret_ref")):
+        argo["gitops_repo_access_secret_ref"] = ""
+
+    if not str(argo.get("gitops_repo_access_secret_ref", "")).strip() or str(argo.get("gitops_repo_access_secret_ref", "")).strip() == "gitops-repo-token":
+        argo["gitops_repo_access_secret_ref"] = (
+            str(project.get("repo_access_secret_ref", "")).strip() or DEFAULT_PROJECT_STATE["project"]["repo_access_secret_ref"]
+        )
+
+    if looks_like_raw_cloudflare_token(cloudflare.get("api_token_secret_ref")):
+        cloudflare["api_token_secret_ref"] = DEFAULT_PROJECT_STATE["cloudflare"]["api_token_secret_ref"]
+
     for env_name in ENVIRONMENTS:
         env_cloudflare = environments.setdefault(env_name, {})
         env_cloudflare.setdefault("base_domain", legacy_base_domain)
@@ -369,6 +407,11 @@ def normalize_project_state(raw_state: Any) -> Dict[str, Any]:
             state.setdefault("secrets", {}).setdefault(env_name, {})
             state["secrets"][env_name] = prune_legacy_example_secrets(state["secrets"][env_name], env_name)
         state.setdefault("targets", {}).setdefault(env_name, deepcopy(DEFAULT_PROJECT_STATE["targets"][env_name]))
+        ncloud = state["targets"][env_name]["ncloud"]
+        if looks_like_raw_ncloud_access_key(ncloud.get("access_key_secret_ref")):
+            ncloud["access_key_secret_ref"] = DEFAULT_PROJECT_STATE["targets"][env_name]["ncloud"]["access_key_secret_ref"]
+        if looks_like_raw_ncloud_access_key(ncloud.get("secret_key_secret_ref")):
+            ncloud["secret_key_secret_ref"] = DEFAULT_PROJECT_STATE["targets"][env_name]["ncloud"]["secret_key_secret_ref"]
         state["targets"][env_name]["ncloud"]["node_product_code"] = normalize_ncloud_node_product_code(
             state["targets"][env_name]["ncloud"].get("node_product_code"),
             env_name,
@@ -401,10 +444,10 @@ class ArgoConfig(BaseModel):
     project_name: str = "default"
     destination_name: str = ""
     destination_server: str = "https://kubernetes.default.svc"
-    gitops_repo_url: str = "https://github.com/Ba-koD/idea.git"
+    gitops_repo_url: str = "https://github.com/Ba-koD/repo_example"
     gitops_repo_branch: str = "main"
     gitops_repo_path: str = "gitops/apps"
-    gitops_repo_access_secret_ref: str = "gitops-repo-token"
+    gitops_repo_access_secret_ref: str = "github-repo-example-token"
     admin_password_secret_ref: str = "argocd-admin-password"
     admin_password_last_applied_at: str = ""
     access_hint: str = "https://argo.rnen.kr"
